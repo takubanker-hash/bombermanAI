@@ -7,12 +7,19 @@
   3. 飛んでいる爆弾が着地する（着地マスにいる人は気絶。投げた爆弾は着地からカウント再開）
   4. 滑っている爆弾が進む（次のマスが塞がっていれば止まる）
   5. 爆発時刻が来た爆弾が爆発する（爆風は柱で止まり、地面の爆弾に当たるとその爆弾は 10 コマ後に爆発、爆風はそこで止まる）
-  6. 両プレイヤーの操作（BOMB/PUNCH/PICKUP/THROW）を 0,1 の順に適用（同じマスへの同時設置は 0 が優先）
-  7. 両プレイヤーの移動を同時に適用（プレイヤー同士はすり抜ける。移動先の爆弾はキック）
-  8. 爆炎のマスにいる人は死亡。両方なら引き分け。制限時間で引き分け"""
+  5.5. 振りかぶり中のパンチ・投げ・キックが、windup 分のコマが経って発動する（対象の爆弾が既に無ければ不発）
+  6. 両プレイヤーの操作（BOMB/PUNCH/PICKUP/THROW）を 0,1 の順に適用。PUNCH/THROW/KICK は即座には発動せず、
+     ここでは「振りかぶりを始める」だけ（player.queued に予約し、windup 後の 5.5 で発動）。同じマスへの同時設置は 0 が優先
+  7. 両プレイヤーの移動を同時に適用（プレイヤー同士はすり抜ける。移動先に地面の爆弾があれば、その場でキックの振りかぶりを始める＝移動はしない）
+  8. 爆炎のマスにいる人は死亡。両方なら引き分け。制限時間で引き分け
+
+パンチ・キック・投げには振りかぶり（windup）の硬直がある（ユーザー確認: モーションによる硬直がある）。
+特にキックは、足元に置いた爆弾をその場では蹴れず、隣接マスから移動して蹴り込む必要があり、その蹴り込む動作自体にも
+KICK_WINDUP コマの硬直がかかる（既存の「隣のマスへ移動しないと蹴れない」制約に加え、蹴り込みそのものも一瞬では終わらない）。"""
 from typing import Tuple
 from .constants import (COLS, ROWS, FUSE, FIRE, BURN, CHAIN_DELAY, SPEED, KICK_STEP, PUNCH_DIST, THROW_DIST,
-                        FLY_FRAMES, STUN, ACTION_LAG, MAX_BOMBS, TIME_LIMIT, PICKUP_FRAMES, DIRS, in_board, is_pillar)
+                        FLY_FRAMES, STUN, ACTION_LAG, PUNCH_WINDUP, THROW_WINDUP, KICK_WINDUP,
+                        MAX_BOMBS, TIME_LIMIT, PICKUP_FRAMES, DIRS, in_board, is_pillar)
 from .state import GameState, Bomb
 from .actions import parse
 
@@ -52,6 +59,8 @@ def step(state: GameState, a0: str, a1: str) -> GameState:
                     b.slide_prog = 0
     # 5. 爆発
     _explode(s, t)
+    # 5.5. 振りかぶり中のパンチ・投げ・キックが windup を終えて発動する
+    _resolve_queued(s, t)
     # 6. 操作
     mv = [parse(a0), parse(a1)]
     for i, p in enumerate(s.players):
@@ -63,13 +72,13 @@ def step(state: GameState, a0: str, a1: str) -> GameState:
             if p.holding is None and sum(1 for b in s.bombs if b.owner == i) < MAX_BOMBS and s.bomb_at(tc, tr) is None:
                 s.bombs.append(Bomb(id=s.next_bomb_id, c=tc, r=tr, owner=i, placed=t, explode_at=t + FUSE))
                 s.next_bomb_id += 1
-        elif act == "PUNCH" and p.prog == 0 and p.holding is None:
+        elif act == "PUNCH" and p.prog == 0 and p.holding is None and p.queued is None:
             fx, fy = DIRS[p.face]
             b = s.bomb_at(p.c + fx, p.r + fy)
             if b is not None:
-                _launch(b, (fx, fy), PUNCH_DIST, t, reset=False)
-                p.lag_until = t + ACTION_LAG
-                _log(s, f"{t}: P{i} punched bomb {b.id}")
+                p.queued = {"kind": "PUNCH", "at": t + PUNCH_WINDUP, "bomb_id": b.id, "dir": (fx, fy)}
+                p.lag_until = t + PUNCH_WINDUP + ACTION_LAG   # 振りかぶり中 + 発動後の硬直
+                _log(s, f"{t}: P{i} winds up a punch on bomb {b.id}")
         elif act == "PICKUP" and p.prog == 0 and p.holding is None:
             b = s.bomb_at(p.c, p.r)
             if b is not None:
@@ -78,15 +87,10 @@ def step(state: GameState, a0: str, a1: str) -> GameState:
                 b.slide = (0, 0)
                 p.holding = b.id
                 p.lag_until = t + PICKUP_FRAMES
-        elif act == "THROW" and p.holding is not None:
-            b = next((x for x in s.bombs if x.id == p.holding), None)
-            if b is not None:
-                b.held = False
-                b.c, b.r = p.tile()
-                _launch(b, DIRS[p.face], THROW_DIST, t, reset=True)
-                _log(s, f"{t}: P{i} threw bomb {b.id}")
-            p.holding = None
-            p.lag_until = t + ACTION_LAG
+        elif act == "THROW" and p.holding is not None and p.queued is None:
+            p.queued = {"kind": "THROW", "at": t + THROW_WINDUP, "bomb_id": p.holding, "dir": DIRS[p.face]}
+            p.lag_until = t + THROW_WINDUP + ACTION_LAG   # 振りかぶり中は抱えたまま。実際に手を離れるのは 5.5 の発動時
+            _log(s, f"{t}: P{i} winds up a throw")
     # 7. 移動（同時）
     for i, p in enumerate(s.players):
         m = mv[i][0]
@@ -101,10 +105,12 @@ def step(state: GameState, a0: str, a1: str) -> GameState:
                     continue
                 b = s.bomb_at(nc, nr)
                 if b is not None:
-                    if b.slide == (0, 0):
-                        b.slide = (dx, dy)
-                        b.slide_prog = 0
-                        _log(s, f"{t}: P{i} kicked bomb {b.id}")
+                    if b.slide == (0, 0) and b.on_ground() and p.queued is None:
+                        # 足元の爆弾はその場では蹴れない（隣のマスに居て、そこへ移動しようとした時だけキックになる）。
+                        # 蹴り込む動作自体にも硬直があり、爆弾はすぐには滑り出さない（5.5 で発動）
+                        p.queued = {"kind": "KICK", "at": t + KICK_WINDUP, "bomb_id": b.id, "dir": (dx, dy)}
+                        p.lag_until = t + KICK_WINDUP
+                        _log(s, f"{t}: P{i} winds up a kick on bomb {b.id}")
                     continue
                 p.dc, p.dr, p.prog = dx, dy, 1
         else:
@@ -139,6 +145,36 @@ def step(state: GameState, a0: str, a1: str) -> GameState:
 def _log(s: GameState, msg: str):
     if s.keep_log:
         s.log.append(msg)
+
+
+def _resolve_queued(s: GameState, t: int):
+    """振りかぶり中だったパンチ・投げ・キックのうち、windup が終わったものを実際に発動する。
+    対象の爆弾が既に爆発・別の人に蹴られる等で無くなっていれば、不発（何も起きない）にする。"""
+    for i, p in enumerate(s.players):
+        q = p.queued
+        if q is None or not p.alive or q["at"] > t:
+            continue
+        p.queued = None
+        b = next((x for x in s.bombs if x.id == q["bomb_id"]), None)
+        if b is None:
+            continue  # 振りかぶっている間に爆弾が消えた（爆発・誘爆など）→ 不発
+        d = tuple(q["dir"])
+        if q["kind"] == "PUNCH":
+            if b.on_ground():   # 元のパンチ判定と同じ条件（bomb_at と同じ on_ground のみ。滑走中でも殴れる仕様を維持）
+                _launch(b, d, PUNCH_DIST, t, reset=False)
+                _log(s, f"{t}: P{i} punched bomb {b.id}")
+        elif q["kind"] == "THROW":
+            if b.held and p.holding == b.id:
+                b.held = False
+                p.holding = None
+                b.c, b.r = p.tile()
+                _launch(b, d, THROW_DIST, t, reset=True)
+                _log(s, f"{t}: P{i} threw bomb {b.id}")
+        elif q["kind"] == "KICK":
+            if b.on_ground() and b.slide == (0, 0) and p.tile() == (b.c - d[0], b.r - d[1]):
+                b.slide = d
+                b.slide_prog = 0
+                _log(s, f"{t}: P{i} kicked bomb {b.id}")
 
 
 def _free_landing(s: GameState, target: Tuple[int, int], d: Tuple[int, int]) -> Tuple[int, int]:

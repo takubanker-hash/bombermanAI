@@ -13,6 +13,7 @@
 cd bomberman-ai
 python -m pip install -r requirements.txt
 python -m pytest -q                                   # ルール・安全ソルバー・エージェントのテスト（約10秒）
+python verify_manual.py                               # 盤面を描きながら1コマずつ目で追う手動検証（爆弾タイマー・キック・パンチ・投げ・誘爆）
 
 # 対戦（rule vs random を 4 試合、シード 0、リプレイを保存）
 python -m bomberman_ai.cli match --a rule --b random --games 4 --seed 0 --replay runs/last.json
@@ -35,9 +36,9 @@ python -m bomberman_ai.cli evaluate --games 6 --seed 100 --max-frames 1800 --mod
 | ファイル | 役割 |
 |---|---|
 | `bomberman_ai/constants.py` | ゲーム定数（確認済み／仮定の印つき）。柱の判定 |
-| `bomberman_ai/state.py` | 状態（プレイヤー・爆弾・爆炎）。複製、JSON 化、同一性キー |
+| `bomberman_ai/state.py` | 状態（プレイヤー・爆弾・爆炎）。振りかぶり中の動作予約(`Player.queued`)も持つ。複製、JSON 化、同一性キー |
 | `bomberman_ai/actions.py` | 行動の文字列表現と合法行動 `legal_actions(state, i)` |
-| `bomberman_ai/engine.py` | 1コマ進める `step(state, a0, a1)`。爆発・誘爆・キック・パンチ・投げ・気絶・硬直・死亡・勝敗 |
+| `bomberman_ai/engine.py` | 1コマ進める `step(state, a0, a1)`。爆発・誘爆・キック・パンチ・投げ（いずれも振りかぶりの硬直あり）・気絶・硬直・死亡・勝敗 |
 | `bomberman_ai/replay.py` | リプレイの保存・再生 |
 | `bomberman_ai/safety.py` | Safety Solver。燃え始め時刻 L、逃げ込めるマス、逃走路、時間余裕、到達可能マス |
 | `bomberman_ai/defense.py` | 守備評価 D: 特徴量 `defense_features` / 重み `DEFAULT_WEIGHTS` / 選択 `choose_defense`。先読み `lookahead` |
@@ -52,7 +53,8 @@ python -m bomberman_ai.cli evaluate --games 6 --seed 100 --max-frames 1800 --mod
 ## AI に渡す状態と返す行動
 
 - 状態: `GameState`（完全情報）。`players[i]`: マス `(c, r)`、移動方向 `(dc, dr)` と進み `prog`（0..5）、向き `face`、`alive`、
-  `stun_until`、`lag_until`、`holding`。`bombs`: `(c, r)`、`owner`、`explode_at`（抱え中は -1）、滑り `slide`、飛行 `fly_to/land_at`。
+  `stun_until`、`lag_until`、`holding`、`queued`（振りかぶり中のパンチ/投げ/キックの予約。`{kind, at, bomb_id, dir}` か `None`）。
+  `bombs`: `(c, r)`、`owner`、`explode_at`（抱え中は -1）、滑り `slide`、飛行 `fly_to/land_at`。
   `flames`: `{(c, r): (消えるコマ, 持ち主)}`。`frame`、`winner`（None/0/1/-1）。
 - 行動: 文字列 `"<移動>/<操作>"`。移動 = `STAY/U/D/L/R`（移動先に爆弾があればキック）、操作 = `BOMB/PUNCH/PICKUP/THROW`。
   例 `"R"`, `"L/BOMB"`, `"STAY/PUNCH"`。合法行動は `actions.legal_actions(state, i)`。
@@ -69,7 +71,8 @@ python -m bomberman_ai.cli evaluate --games 6 --seed 100 --max-frames 1800 --mod
 
 キックの滑る速さ（1マス5コマ）、パンチ／投げの飛行時間（20コマ）、気絶の長さ（60コマ）、硬直（10コマ）、同時設置数（8）、
 投げの距離（6マス）、着地先が塞がっている時の処理、盤外への飛行（端で止まる）、移動途中の方向転換（反転のみ）、
-プレイヤー同士のすり抜け、両者同時行動の処理順序。詳細は SPEC.md。
+プレイヤー同士のすり抜け、両者同時行動の処理順序、**パンチ・キック・投げそれぞれの振りかぶり時間（現在いずれも6コマの仮値。
+硬直があること自体と、キックが足元では蹴れないことはユーザー確認済み。正確なコマ数は未確認）**。詳細は SPEC.md。
 
 ## 動画解析プロジェクトとの接続
 

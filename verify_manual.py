@@ -71,18 +71,28 @@ print(f"設置した本人(P0)は死亡したか = {not s.players[0].alive}（�
 print("OK: FUSE={} コマちょうどで爆発し、いた本人が死亡した".format(FUSE))
 
 # ============================================================
-section("検証2: キック（隣の爆弾へ移動すると滑り、1マスKICK_STEPコマで進む）")
+section("検証2: キック（隣の爆弾へ移動すると、まず蹴り込みの振りかぶりが入り、KICK_WINDUPコマ後に滑り出す。1マスKICK_STEPコマで進む）")
 # ============================================================
 s = GameState.initial(p0=(0, 0), p1=(12, 10))
 s.bombs.append(Bomb(id=0, c=1, r=0, owner=1, placed=0, explode_at=99999))
 s.next_bomb_id = 1
 board(s, "キック前")
-s = step(s, "R", "STAY")  # 右へ動こうとする→隣に爆弾があるのでキックになる
-print(f"コマ{s.frame}: P0の位置 = {s.players[0].tile()}（キックしたのでP0自身は動いていないはず）")
+s = step(s, "R", "STAY")  # 右へ動こうとする→隣に爆弾があるので、その場で蹴り込みの振りかぶりを始める
+print(f"コマ{s.frame}: P0の位置 = {s.players[0].tile()}（振りかぶり中もP0自身は動いていないはず）")
 assert s.players[0].tile() == (0, 0), "NG: キックしたのにP0が動いてしまった"
-print(f"        爆弾の滑り方向 slide = {s.bombs[0].slide}（(1,0)=右方向が正しい）")
-assert s.bombs[0].slide == (1, 0)
-print("OK: キックで自分は動かず、爆弾だけ右へ滑り始めた")
+print(f"        振りかぶりの予約 queued = {s.players[0].queued}")
+print(f"        爆弾の滑り方向 slide = {s.bombs[0].slide}（振りかぶり中はまだ (0,0)=動いていないはず）")
+assert s.bombs[0].slide == (0, 0), "NG: 振りかぶり中なのに即座に滑り始めてしまった"
+print(f"OK: 移動しようとした瞬間はまだ滑り出さず、振りかぶり（KICK_WINDUP={KICK_WINDUP}コマ）を予約しただけ")
+
+for _ in range(KICK_WINDUP - 1):
+    s = step(s, "STAY", "STAY")
+print(f"コマ{s.frame}（振りかぶりの1コマ前）: まだ滑っていないか = {s.bombs[0].slide == (0, 0)}")
+assert s.bombs[0].slide == (0, 0)
+s = step(s, "STAY", "STAY")  # 振りかぶりが終わるコマ
+print(f"コマ{s.frame}（振りかぶり完了）: 爆弾の滑り方向 slide = {s.bombs[0].slide}（(1,0)=右方向が正しい）、queuedは消えたか={s.players[0].queued is None}")
+assert s.bombs[0].slide == (1, 0) and s.players[0].queued is None
+print(f"OK: 振りかぶりKICK_WINDUP={KICK_WINDUP}コマの後、ようやく爆弾が右へ滑り始めた")
 
 positions = []
 for i in range(KICK_STEP * 4):
@@ -108,7 +118,7 @@ assert s2.bombs[0].c == COLS - 1 and s2.bombs[0].slide == (0, 0)
 print("OK: 盤の端でちゃんと止まった（すり抜けない）")
 
 # ============================================================
-section("検証3: パンチ（隣の爆弾を前方へ飛ばす。距離PUNCH_DISTマス、爆発時刻は変わらない）")
+section("検証3: パンチ（振りかぶりKICK_WINDUP相当のPUNCH_WINDUPコマの後、隣の爆弾を前方へ飛ばす。距離PUNCH_DISTマス、爆発時刻は変わらない）")
 # ============================================================
 s = GameState.initial(p0=(0, 0), p1=(12, 10))
 s.players[0].face = "R"
@@ -117,12 +127,22 @@ s.next_bomb_id = 1
 before_explode_at = s.bombs[0].explode_at
 board(s, "パンチ前")
 s = step(s, "STAY/PUNCH", "STAY")
-print(f"パンチ直後: fly_to = {s.bombs[0].fly_to}（期待値: (1+{PUNCH_DIST},0) = ({1+PUNCH_DIST},0)）")
+print(f"パンチ入力直後: fly_to = {s.bombs[0].fly_to}（振りかぶり中なのでまだ None のはず）")
+assert s.bombs[0].fly_to is None, "NG: 振りかぶりを待たずに即座に飛んでしまった"
+print(f"        振りかぶりの予約 queued = {s.players[0].queued}")
+print(f"OK: パンチも即座には発動せず、PUNCH_WINDUP={PUNCH_WINDUP}コマの振りかぶりを予約した")
+
+for _ in range(PUNCH_WINDUP - 1):
+    s = step(s, "STAY", "STAY")
+print(f"コマ{s.frame}（振りかぶりの1コマ前）: まだ飛んでいないか = {s.bombs[0].fly_to is None}")
+assert s.bombs[0].fly_to is None
+s = step(s, "STAY", "STAY")  # 振りかぶりが終わるコマ→ここで実際に飛ぶ
+print(f"コマ{s.frame}（振りかぶり完了）: fly_to = {s.bombs[0].fly_to}（期待値: (1+{PUNCH_DIST},0) = ({1+PUNCH_DIST},0)）")
 assert s.bombs[0].fly_to == (1 + PUNCH_DIST, 0)
 print(f"        爆発予定コマ = {s.bombs[0].explode_at}（パンチ前と同じはず: {before_explode_at}）")
 assert s.bombs[0].explode_at == before_explode_at
-print(f"        P0のlag_until = {s.players[0].lag_until}（パンチ後の硬直。設置コマ+{ACTION_LAG}）")
-print("OK: パンチで PUNCH_DIST マス先へ飛び、爆発時刻はリセットされない（キックと違いタイマーは動かしていないだけで進行中）")
+print(f"        P0のlag_until = {s.players[0].lag_until}（振りかぶりPUNCH_WINDUP={PUNCH_WINDUP} + 発動後の硬直ACTION_LAG={ACTION_LAG}）")
+print("OK: パンチは振りかぶりの後 PUNCH_DIST マス先へ飛び、爆発時刻はリセットされない（キックと違いタイマーは動かしていないだけで進行中）")
 
 for _ in range(FLY_FRAMES - 1):
     s = step(s, "STAY", "STAY")
@@ -155,9 +175,21 @@ assert len(s.bombs) == 1 and s.bombs[0].held
 print("OK: 本来のタイマーを過ぎても、抱えている間は爆発しなかった")
 
 s = step(s, "STAY/THROW", "STAY")
+throw_input_at = s.frame
+print(f"投げ入力直後(コマ{throw_input_at}): fly_to = {s.bombs[0].fly_to}, held = {s.bombs[0].held}（振りかぶり中なのでまだ手の中のはず）")
+assert s.bombs[0].fly_to is None and s.bombs[0].held, "NG: 振りかぶりを待たずに即座に手を離れてしまった"
+print(f"        振りかぶりの予約 queued = {s.players[0].queued}")
+print(f"OK: 投げも即座には発動せず、THROW_WINDUP={THROW_WINDUP}コマの振りかぶりを予約した（この間まだ抱えたまま）")
+
+for _ in range(THROW_WINDUP - 1):
+    s = step(s, "STAY", "STAY")
+print(f"コマ{s.frame}（振りかぶりの1コマ前）: まだ手を離していないか = {s.bombs[0].held}")
+assert s.bombs[0].held
+s = step(s, "STAY", "STAY")  # 振りかぶりが終わるコマ→ここで実際に手を離れる
 throw_at = s.frame
-print(f"投げたコマ{throw_at}: fly_to = {s.bombs[0].fly_to}（期待値: (THROW_DIST,0) = ({THROW_DIST},0)）")
-assert s.bombs[0].fly_to == (THROW_DIST, 0)
+print(f"コマ{throw_at}（振りかぶり完了）: fly_to = {s.bombs[0].fly_to}（期待値: (THROW_DIST,0) = ({THROW_DIST},0)）、held = {s.bombs[0].held}")
+assert s.bombs[0].fly_to == (THROW_DIST, 0) and not s.bombs[0].held
+print(f"OK: 投げは振りかぶりTHROW_WINDUP={THROW_WINDUP}コマの後、ようやく手を離れた")
 for _ in range(FLY_FRAMES):
     s = step(s, "STAY", "STAY")
 land_at = s.frame
@@ -185,6 +217,32 @@ for _ in range(CHAIN_DELAY):
 print(f"コマ{s.frame}: 2個目も爆発したか = {len(s.bombs) == 0}")
 assert len(s.bombs) == 0
 print(f"OK: 誘爆は CHAIN_DELAY={CHAIN_DELAY} コマ後に起きた")
+
+
+# ============================================================
+section("検証6: 足元の爆弾はその場で蹴れない（隣のマスへ離れてから改めて蹴り込む必要がある）")
+# ============================================================
+s = GameState.initial(p0=(0, 0), p1=(12, 10))
+s.players[0].face = "R"
+s = step(s, "STAY/BOMB", "STAY")  # 自分の足元(0,0)に設置。今この爆弾の真上に立っている
+board(s, "自分の爆弾の上に立っている状態")
+print(f"P0は自分の爆弾の上にいるか = {s.players[0].tile() == (s.bombs[0].c, s.bombs[0].r)}")
+s_try = step(s, "R", "STAY")  # 隣(空きマス)へ移動しようとしても、それは足元の爆弾ではないのでキックは起きない
+print(f"隣へ移動しようとした結果: queued = {s_try.players[0].queued}（Noneのはず。足元の爆弾を「その場で蹴る」行動自体が存在しない）")
+assert s_try.players[0].queued is None
+print("OK: 足元の爆弾を蹴る行動は存在しない（合法行動は常に隣のマスへの移動か操作のみ）")
+
+for _ in range(SPEED):
+    s = step(s, "D", "STAY")  # 下へ1マス離れる
+print(f"1マス離れた: P0の位置 = {s.players[0].tile()}")
+assert s.players[0].tile() == (0, 1)
+s = step(s, "U", "STAY")  # 元の爆弾へ向かって蹴り込む→ここでようやく振りかぶりが始まる
+print(f"改めて爆弾へ向かって移動した結果: queued = {s.players[0].queued}")
+assert s.players[0].queued is not None and s.players[0].queued["kind"] == "KICK"
+print(f"        P0の位置 = {s.players[0].tile()}（振りかぶり中なのでまだ元のマス(0,1)のはず）")
+assert s.players[0].tile() == (0, 1)
+print("OK: いったん離れ、隣のマスから改めて蹴り込むことで、はじめてキックの振りかぶりが始まった")
+print(f"   （足元の爆弾を蹴るまでの合計時間 = 離れるのに{SPEED}コマ + 振りかぶりKICK_WINDUP={KICK_WINDUP}コマ + キック自体KICK_STEP={KICK_STEP}コマ）")
 
 print("\n" + W)
 print("全ての手動検証に合格しました。")

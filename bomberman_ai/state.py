@@ -19,6 +19,7 @@ class Player:
     stun_until: int = 0    # このコマまで動けない（頭に爆弾）
     lag_until: int = 0     # このコマまで移動できない（硬直）
     holding: Optional[int] = None   # 抱えている爆弾の id
+    queued: Optional[dict] = None   # 振りかぶり中の動作。{kind: PUNCH/THROW/KICK, at: 発動するコマ, bomb_id, dir}
     cause_of_death: str = ""        # "own_bomb" / "opp_bomb" / ""
     def pos(self) -> Tuple[float, float]:
         """マス単位の連続位置（中心が整数）"""

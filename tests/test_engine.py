@@ -74,30 +74,62 @@ def test_chain_explosion_delay():
     assert len(s.bombs) == 0 and (8, 0) in s.flames
 
 
-def test_kick_slides_and_stops():
+def test_kick_has_windup_then_slides_and_stops():
     s = GameState.initial(p0=(0, 0), p1=(12, 10))
     s.bombs.append(Bomb(id=0, c=1, r=0, owner=1, placed=0, explode_at=10000))
     s.next_bomb_id = 1
-    s = step(s, "R", "STAY")  # 右の爆弾をキック。自分は動かない
-    assert (s.players[0].c, s.players[0].prog) == (0, 0) and s.bombs[0].slide == (1, 0)
+    s = step(s, "R", "STAY")  # 右の爆弾へ移動しようとする→その場でキックの振りかぶりを始める。自分は動かない
+    assert (s.players[0].c, s.players[0].prog) == (0, 0)
+    assert s.players[0].queued == {"kind": "KICK", "at": s.frame + KICK_WINDUP, "bomb_id": 0, "dir": (1, 0)}
+    assert s.bombs[0].slide == (0, 0)  # 振りかぶり中はまだ滑り出さない
+    s = run(s, [("STAY", "STAY")] * (KICK_WINDUP - 1))
+    assert s.bombs[0].slide == (0, 0)  # windup の最後の1コマ手前でもまだ
+    s = step(s, "STAY", "STAY")  # windup が終わるコマ
+    assert s.bombs[0].slide == (1, 0) and s.players[0].queued is None
     s = run(s, [("STAY", "STAY")] * KICK_STEP)
     assert s.bombs[0].c == 2
     s = run(s, [("STAY", "STAY")] * (KICK_STEP * 20))
     assert s.bombs[0].c == 12 and s.bombs[0].slide == (0, 0)  # 端で止まる
 
 
-def test_punch_flies_3_tiles_and_keeps_timer():
+def test_cannot_kick_bomb_under_own_feet():
+    """足元（自分がいまいるマス）に置いた爆弾はその場では蹴れない。行動の表現上「自分のマスを蹴る」動作自体が無く、
+    キックは必ず隣のマスへ移動しようとした時だけ起こる。いったん離れて、隣のマスから改めて蹴り込む必要がある"""
+    s = GameState.initial(p0=(0, 0), p1=(12, 10))
+    s.players[0].face = "R"
+    s = step(s, "STAY/BOMB", "STAY")  # 自分の足元(0,0)に設置。自分は今この爆弾の真上に乗っている
+    assert (s.bombs[0].c, s.bombs[0].r) == (0, 0)
+    assert s.players[0].tile() == (0, 0)  # 足元に自分の爆弾がある状態
+    # この状態から「その場で蹴る」行動は存在しない（合法行動は移動か設置・パンチ等の操作のみ）。
+    # 隣のマス(1,0)や(0,1)へ移動しようとしても、それは足元の爆弾ではなく移動先のマス（空）を見るだけなのでキックは起きない
+    s2 = step(s, "R", "STAY")
+    assert s2.players[0].queued is None and s.bombs[0].slide == (0, 0)  # キックの振りかぶりは起きていない
+    # 蹴るには、いったん爆弾から離れ(SPEED コマ)、隣のマスから改めてその爆弾へ向かって移動する必要がある
+    s = run(s, [("D", "STAY")] * SPEED)  # 下へ1マス離れる
+    assert (s.players[0].c, s.players[0].r, s.players[0].prog) == (0, 1, 0)
+    s = step(s, "U", "STAY")  # 元の爆弾へ向かって蹴り込む→ここでようやくキックの振りかぶりが始まる
+    assert s.players[0].queued is not None and s.players[0].queued["kind"] == "KICK"
+    assert (s.players[0].c, s.players[0].r) == (0, 1)  # まだ振りかぶり中で、まだ元のマスへは戻っていない
+
+
+def test_punch_has_windup_then_flies_3_tiles_and_keeps_timer():
     s = GameState.initial(p0=(0, 0), p1=(12, 10))
     s.players[0].face = "R"
     s.bombs.append(Bomb(id=0, c=1, r=0, owner=1, placed=0, explode_at=500))
     s.next_bomb_id = 1
     s = step(s, "STAY/PUNCH", "STAY")
-    assert s.bombs[0].fly_to == (4, 0) and s.players[0].lag_until == s.frame + ACTION_LAG
+    assert s.bombs[0].fly_to is None  # 振りかぶり中はまだ飛ばない
+    assert s.players[0].queued == {"kind": "PUNCH", "at": s.frame + PUNCH_WINDUP, "bomb_id": 0, "dir": (1, 0)}
+    assert s.players[0].lag_until == s.frame + PUNCH_WINDUP + ACTION_LAG
+    s = run(s, [("STAY", "STAY")] * (PUNCH_WINDUP - 1))
+    assert s.bombs[0].fly_to is None  # windup の最後の1コマ手前でもまだ飛ばない
+    s = step(s, "STAY", "STAY")  # windup が終わるコマ→ここで実際に飛ぶ
+    assert s.bombs[0].fly_to == (4, 0) and s.players[0].queued is None
     s = run(s, [("STAY", "STAY")] * FLY_FRAMES)
     assert (s.bombs[0].c, s.bombs[0].r) == (4, 0) and s.bombs[0].explode_at == 500
 
 
-def test_pickup_throw_resets_fuse_and_stuns():
+def test_pickup_throw_has_windup_resets_fuse_and_stuns():
     s = GameState.initial(p0=(0, 0), p1=(6, 0))
     s.players[0].face = "R"
     s = step(s, "STAY/BOMB", "STAY")
@@ -105,12 +137,30 @@ def test_pickup_throw_resets_fuse_and_stuns():
     assert s.players[0].holding == 0 and s.bombs[0].held and s.bombs[0].explode_at == -1
     s = run(s, [("STAY", "STAY")] * PICKUP_FRAMES)
     s = step(s, "STAY/THROW", "STAY")
-    assert s.bombs[0].fly_to == (THROW_DIST, 0)
+    assert s.bombs[0].fly_to is None and s.bombs[0].held  # 振りかぶり中はまだ手の中
+    assert s.players[0].queued["kind"] == "THROW"
+    s = run(s, [("STAY", "STAY")] * (THROW_WINDUP - 1))
+    assert s.bombs[0].held  # windup の最後の1コマ手前でもまだ手を離さない
+    s = step(s, "STAY", "STAY")  # windup が終わるコマ→ここで実際に手を離れる
+    assert s.bombs[0].fly_to == (THROW_DIST, 0) and not s.bombs[0].held and s.players[0].holding is None
     s = run(s, [("STAY", "STAY")] * FLY_FRAMES)
     b = s.bombs[0]
     assert (b.c, b.r) == (6, 0) and b.explode_at == s.frame + FUSE
     assert s.players[1].stun_until == s.frame + STUN  # 頭に当たって気絶
     assert legal_actions(s, 1) == ["STAY"]
+
+
+def test_punch_misfires_if_target_bomb_disappears_during_windup():
+    """振りかぶっている間に対象の爆弾が消えたら（誘爆等）、パンチは不発になる（新しく飛ぶ爆弾は無い）"""
+    s = GameState.initial(p0=(0, 0), p1=(12, 10))
+    s.players[0].face = "R"
+    s.bombs.append(Bomb(id=1, c=1, r=0, owner=1, placed=0, explode_at=500))
+    s.next_bomb_id = 2
+    s = step(s, "STAY/PUNCH", "STAY")
+    assert s.players[0].queued["bomb_id"] == 1
+    s.bombs = []  # windup 中に対象の爆弾が無くなった状況を再現
+    s = run(s, [("STAY", "STAY")] * PUNCH_WINDUP)
+    assert s.players[0].queued is None and s.bombs == []  # 不発。エラーにならず何も起きない
 
 
 def test_death_by_opponent_and_draw():
