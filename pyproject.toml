@@ -1,0 +1,9 @@
+[project]
+name = "bomberman-ai"
+version = "0.1.0"
+description = "Deterministic Bomberman (SBR2 1v1) simulator with defense/offense evaluation, learning and evaluation harness"
+requires-python = ">=3.9"
+dependencies = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
