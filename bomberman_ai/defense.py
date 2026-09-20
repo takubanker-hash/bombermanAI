@@ -10,7 +10,7 @@
   routes      逃走路の数 / 4
   slack       いるマスが燃えるまでの余裕 / FUSE（燃えないなら 1）
   on_line     いるマスが爆風線上（燃える予定）なら 1。余裕があっても線上に留まらないための項
-  mobility    危険を無視して 4 歩以内に着けるマス数 / 20（将来の移動自由度）
+  mobility    危険を考慮して 5 歩以内に逃げ込めるマス数 / 20（将来の移動自由度）
   deadend     袋小路（出られる隣が 1 つ以下）なら 1
   own_danger  自分の爆弾の爆風線上にいるなら 1
   dist_opp    相手との距離 / 20（重み 0 でも可。距離を取る／詰める性向）
@@ -20,13 +20,14 @@ from .constants import FUSE, SPEED, DIRS, in_board, is_pillar
 from .state import GameState
 from .safety import escape_area, escape_routes, time_slack, reachable_tiles, burn_schedule, on_own_blast_line, INF
 from .engine import step
+from .temporal import survival
 from .actions import legal_actions, parse
 
-FEATURE_NAMES = ["safe_area", "routes", "slack", "on_line", "mobility", "deadend", "own_danger", "dist_opp", "dead"]
+FEATURE_NAMES = ["safe_area", "routes", "slack", "on_line", "mobility", "deadend", "own_danger", "dist_opp", "opponent_control", "dead"]
 
 DEFAULT_WEIGHTS: Dict[str, float] = {
     "safe_area": 1.0, "routes": 0.8, "slack": 1.0, "on_line": -1.0, "mobility": 0.4, "deadend": -0.6, "own_danger": -0.8,
-    "dist_opp": 0.0, "dead": -100.0,
+    "dist_opp": 0.0, "opponent_control": -0.6, "dead": -100.0,
 }
 
 
@@ -37,19 +38,26 @@ def defense_features(s: GameState, me: int) -> Dict[str, float]:
         f["dead"] = 1.0
         return f
     safe, info = escape_area(s, me)
-    routes = len({info["first"][t] for t in safe if info["first"].get(t)})
+    routes = len(info["route_directions"])
+    if not safe:
+        safe = survival(s, me)["cells"]
     c, r = p.tile()
     lt = info["L"].get((c, r))
     sl = INF if lt is None else lt - s.frame
     open_nb = sum(1 for dx, dy in DIRS.values() if in_board(c + dx, r + dy) and not is_pillar(c + dx, r + dy) and s.bomb_at(c + dx, r + dy) is None)
     q = s.players[1 - me]
     oc, orr = q.tile()
+    local, local_info = escape_area(s, me, max_tiles=5)
+    # Prefer refuges we can reach before the opponent can threaten their entry.
+    contested = sum(1 for x in local if
+                    abs(x[0]-oc)+abs(x[1]-orr) <= local_info['dist'][x]/SPEED)
     return {
+        "opponent_control": contested / max(1, len(local)),
         "safe_area": min(len(safe), 30) / 30.0,
         "routes": routes / 4.0,
         "slack": 1.0 if sl >= INF else max(0, min(sl, FUSE)) / FUSE,
         "on_line": 0.0 if lt is None else 1.0,
-        "mobility": min(len(reachable_tiles(s, me, SPEED * 4)), 20) / 20.0,
+        "mobility": min(len(local), 20) / 20.0,
         "deadend": 1.0 if open_nb <= 1 else 0.0,
         "own_danger": 1.0 if on_own_blast_line(s, me) else 0.0,
         "dist_opp": (abs(c - oc) + abs(r - orr)) / 20.0,
@@ -64,10 +72,12 @@ def defense_score(feats: Dict[str, float], weights: Dict[str, float]) -> float:
 def lookahead(s: GameState, me: int, action: str, frames: int = SPEED, opp_action: str = "STAY") -> GameState:
     """自分の行動を frames コマ続け、相手は opp_action を続けたときの状態（移動は最初のコマだけ指示し、以降は続行）"""
     mv, act = parse(action)
+    omv, _ = parse(opp_action)
     t = s.copy(light=True)
     for k in range(frames):
         a = action if k == 0 else mv  # 操作は最初のコマだけ、移動は続ける
-        t = step(t, a, opp_action) if me == 0 else step(t, opp_action, a)
+        b = opp_action if k == 0 else omv
+        t = step(t, a, b) if me == 0 else step(t, b, a)
         if t.done():
             break
     return t
@@ -82,6 +92,8 @@ def survivable_moves(s: GameState, me: int, frames: int = SPEED) -> List[Tuple[s
         t = lookahead(s, me, a, frames)
         cands.append((a, t))
     ok = [(a, t) for a, t in cands if t.players[me].alive and (len(escape_area(t, me)[0]) > 0 or t.done())]
+    if not ok:
+        ok = [(a, t) for a, t in cands if t.players[me].alive and survival(t, me)['alive']]
     return ok or cands
 
 
@@ -89,6 +101,10 @@ def choose_defense(s: GameState, me: int, weights: Dict[str, float] = None, fram
     weights = weights or DEFAULT_WEIGHTS
     best, best_score, best_feats = "STAY", -1e18, {}
     for a, t in survivable_moves(s, me, frames):
+        if time_slack(s, me) <= SPEED:
+            from .safety import bounded_minimax
+            if bounded_minimax(s, me, a, frames=2, max_nodes=128)['status'] == 'unsafe':
+                continue
         f = defense_features(t, me)
         sc = defense_score(f, weights)
         if sc > best_score:

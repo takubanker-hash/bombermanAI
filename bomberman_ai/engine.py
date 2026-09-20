@@ -30,37 +30,7 @@ def step(state: GameState, a0: str, a1: str) -> GameState:
         return s
     s.frame += 1
     t = s.frame
-    # 2. 爆炎
-    s.flames = {k: v for k, v in s.flames.items() if v[0] > t}
-    # 3. 着地
-    for b in s.bombs:
-        if b.fly_to is not None and b.land_at <= t:
-            b.c, b.r = _free_landing(s, b.fly_to, b.slide)  # slide に飛行方向を入れてある
-            b.fly_to = None
-            b.slide = (0, 0)
-            b.slide_prog = 0
-            if b.explode_at < 0 or b.explode_at < t:
-                b.explode_at = t + FUSE  # 投げた物はカウント再開。飛行中に時刻が来ていた物も着地から
-            for j, p in enumerate(s.players):
-                if p.alive and p.tile() == (b.c, b.r):
-                    p.stun_until = t + STUN
-                    _log(s, f"{t}: P{j} stunned by bomb {b.id}")
-    # 4. 滑り
-    for b in s.bombs:
-        if b.slide != (0, 0) and b.on_ground():
-            b.slide_prog += 1
-            if b.slide_prog >= KICK_STEP:
-                nc, nr = b.c + b.slide[0], b.r + b.slide[1]
-                if s.blocked(nc, nr) or any(p.alive and p.tile() == (nc, nr) for p in s.players):
-                    b.slide = (0, 0)
-                    b.slide_prog = 0
-                else:
-                    b.c, b.r = nc, nr
-                    b.slide_prog = 0
-    # 5. 爆発
-    _explode(s, t)
-    # 5.5. 振りかぶり中のパンチ・投げ・キックが windup を終えて発動する
-    _resolve_queued(s, t)
+    advance_environment(s, t)
     # 6. 操作
     mv = [parse(a0), parse(a1)]
     for i, p in enumerate(s.players):
@@ -140,6 +110,40 @@ def step(state: GameState, a0: str, a1: str) -> GameState:
     elif t >= TIME_LIMIT:
         s.winner = -1
     return s
+
+
+def advance_environment(s: GameState, t: int):
+    """In-place phases 2–5.5, shared with the deterministic hazard forecast."""
+    # 2. 爆炎
+    s.flames = {k: v for k, v in s.flames.items() if v[0] > t}
+    # 3. 着地
+    for b in s.bombs:
+        if b.fly_to is not None and b.land_at <= t:
+            b.c, b.r = _free_landing(s, b.fly_to, b.slide)  # slide に飛行方向を入れてある
+            b.fly_to = None
+            b.slide = (0, 0)
+            b.slide_prog = 0
+            if b.explode_at < 0 or b.explode_at < t:
+                b.explode_at = t + FUSE  # 投げた物はカウント再開。飛行中に時刻が来ていた物も着地から
+            for j, p in enumerate(s.players):
+                if p.alive and p.tile() == (b.c, b.r):
+                    p.stun_until = t + STUN
+                    _log(s, f"{t}: P{j} stunned by bomb {b.id}")
+    # 4. 滑り
+    for b in s.bombs:
+        if b.slide != (0, 0) and b.on_ground():
+            b.slide_prog += 1
+            if b.slide_prog >= KICK_STEP:
+                nc, nr = b.c + b.slide[0], b.r + b.slide[1]
+                if s.blocked(nc, nr) or any(p.alive and p.tile() == (nc, nr) for p in s.players):
+                    b.slide = (0, 0)
+                    b.slide_prog = 0
+                else:
+                    b.c, b.r = nc, nr
+                    b.slide_prog = 0
+    # 5. 爆発
+    _explode(s, t)
+    _resolve_queued(s, t)
 
 
 def _log(s: GameState, msg: str):

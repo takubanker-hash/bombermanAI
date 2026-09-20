@@ -1,14 +1,18 @@
 # -*- coding: utf-8 -*-
 """対戦評価。勝率・自爆率・攻撃成功率・相手の逃走路を減らした量を、同じシードで再現できる形で出す。
   python -m bomberman_ai.cli evaluate --a combined --b rule --games 10 --seed 0 [--model runs/model.json]"""
-import json, os, time
+import json, os, time, copy
 from typing import Dict, List
 from .agents import Agent, make_agent, play_game
 from .state import GameState
 
 
-def match(a0: Agent, a1: Agent, n_games: int, seed: int = 0, max_frames: int = 7200, swap_sides: bool = True) -> Dict:
+def match(a0: Agent, a1: Agent, n_games: int, seed: int = 0, max_frames: int = 7200, swap_sides: bool = True, first_seat: int = 0, start=None) -> Dict:
     """a0 の視点の指標。swap_sides で半分は左右を入れ替える（初期位置の有利不利を打ち消す）"""
+    if n_games < 1 or max_frames < 1:
+        raise ValueError("games and max_frames must be positive")
+    templates = copy.deepcopy((a0, a1))
+    game_stats = []
     wins = losses = draws = 0
     own_deaths = 0
     opp_deaths_by_my_bomb = 0
@@ -16,9 +20,10 @@ def match(a0: Agent, a1: Agent, n_games: int, seed: int = 0, max_frames: int = 7
     frames = []
     t0 = time.time()
     for g in range(n_games):
-        flip = swap_sides and (g % 2 == 1)
+        a0, a1 = copy.deepcopy(templates)
+        flip = bool(first_seat) ^ (swap_sides and (g % 2 == 1))
         A, B = (a1, a0) if flip else (a0, a1)
-        s, acts, s0 = play_game(A, B, seed=seed + g, max_frames=max_frames)
+        s, acts, s0 = play_game(A, B, seed=seed + g, max_frames=max_frames, start=start.copy() if start is not None else None)
         me = 1 if flip else 0
         frames.append(s.frame)
         if s.winner == me:
@@ -32,9 +37,12 @@ def match(a0: Agent, a1: Agent, n_games: int, seed: int = 0, max_frames: int = 7
             own_deaths += 1
         if not po.alive and po.cause_of_death == "opp_bomb":
             opp_deaths_by_my_bomb += 1
-        my_bombs += sum(1 for a in acts if a[me].endswith("/BOMB"))
-    st = a0.stats()
+        my_bombs += a0.placements
+        game_stats.append(a0.stats())
+    st = {k: sum(x.get(k, 0.0) for x in game_stats) / n_games
+          for k in ("mean_D", "mean_F", "mean_routes_cut")}
     return {
+        "seed": seed, "swap_sides": swap_sides, "metrics_version": 2,
         "games": n_games, "max_frames": max_frames, "win_rate": wins / n_games, "loss_rate": losses / n_games, "draw_rate": draws / n_games,
         "self_kill_rate": own_deaths / n_games,
         "attack_success_rate": opp_deaths_by_my_bomb / max(1, my_bombs),
@@ -59,7 +67,7 @@ def evaluate_suite(model: dict, n_games: int, seed: int, opponents=("random", "r
 
 
 def table(results: Dict[str, Dict]) -> str:
-    keys = ["win_rate", "self_kill_rate", "attack_success_rate", "mean_routes_cut", "mean_frames"]
+    keys = ["win_rate", "draw_rate", "self_kill_rate", "attack_success_rate", "mean_routes_cut", "mean_D", "mean_F"]
     lines = ["| 相手 | " + " | ".join(keys) + " |", "|---|" + "---|" * len(keys)]
     for name, r in results.items():
         lines.append("| " + name + " | " + " | ".join("%.3f" % r[k] if isinstance(r[k], float) else str(r[k]) for k in keys) + " |")

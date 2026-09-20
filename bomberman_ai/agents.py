@@ -170,7 +170,8 @@ class CombinedAgent(Agent):
         c = _continue_move(s, me)
         if c:
             return c
-        danger = in_danger(s, me)
+        # A distant blast is an opportunity to prepare, not an immediate retreat.
+        danger = time_slack(s, me) <= SPEED * 5 or not escape_area(s, me)[0]
         if not danger and s.frame - self._last[0] < SPEED:
             return "STAY"  # 安全なときは SPEED コマに 1 回だけ考える
         self.n += 1
@@ -221,6 +222,7 @@ def make_agent(kind: str, model: dict = None) -> Agent:
 
 def play_game(a0: Agent, a1: Agent, seed: int = 0, max_frames: int = 7200, start=None) -> Tuple[GameState, List[Tuple[str, str]], GameState]:
     """1 試合。乱数は seed で固定。返り値: 最終状態, 行動列, 初期状態"""
+    a0.placements = a1.placements = 0
     rng = random.Random(seed)
     s0 = start or GameState.initial()
     s = s0
@@ -229,7 +231,11 @@ def play_game(a0: Agent, a1: Agent, seed: int = 0, max_frames: int = 7200, start
         x = a0.act(s, 0, rng)
         y = a1.act(s, 1, rng)
         acts.append((x, y))
+        old_id = s.next_bomb_id
         s = step(s, x, y)
+        for b in s.bombs:
+            if b.id >= old_id:
+                (a0 if b.owner == 0 else a1).placements += 1
         if s.done():
             break
     return s, acts, s0

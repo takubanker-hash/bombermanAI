@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""動画解析プロジェクト（bomberman-analysis / bomberman-yukimi）との接続。
+"""動画解析プロジェクト（bomberman-analysis）との接続。
 解析側の report/replay_data.js（const REPLAY={...}）の「場面（clip）」の 1 コマを、シミュレータの GameState に変換する。
   clip.frames[k] = {ok, me:[x,y], op:[x,y], bombs:[[c, r, age, explode_at, owner]], fl:[[c, r, age]]}
     - 位置は足もとのマス座標（小数）。ここでは四捨五入してマスの中心に置く
@@ -11,7 +11,7 @@
   clips = load_clips("C:/.../bomberman-analysis/report/replay_data.js")
   s = state_from_frame(clips[0], k=300)
   # → AI に渡して「この局面で AI なら何をするか」を比べる（agents.CombinedAgent().act(s, 0, rng)）
-制約: 解析側の位置検出には誤差（半マス程度）と欠けがあり、キャラの向き・硬直・抱えている爆弾は分からない（向きは D、硬直なしとする）。"""
+制約: 解析側の位置検出には誤差（半マス程度）と欠けがあり、キャラの向き・硬直・抱えている爆弾は分からない（向きは D、硬直なし、queued=None とする）。"""
 import json, os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from bomberman_ai.constants import FUSE, BURN, COLS, ROWS, is_pillar

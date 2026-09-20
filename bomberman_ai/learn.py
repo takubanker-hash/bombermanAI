@@ -1,77 +1,147 @@
-# -*- coding: utf-8 -*-
-"""初期学習処理: 攻守それぞれの重みを、対戦結果の報酬で改善する（進化戦略 / 有限差分の方策勾配）。
-大規模なニューラルネットや MCTS は使わない。線形の評価関数 D・F の重みベクトルを直接更新する。
+"""Antithetic evolution strategy with frozen opponents and holdout acceptance.
 
-  役割 defense: CombinedAgent の wD を更新（wF 固定）。相手は固定（rule または前回のモデル）
-  役割 offense: CombinedAgent の wF を更新（wD 固定）
-  報酬 = 勝ち +1 / 負け -1（自爆なら -1.5）/ 引き分け 0 + 0.1 × 生存時間の割合 + 0.2 × 逃走路の削減（上限1）+ 0.05 × 設置数（上限1）
-  更新: w ← w + lr × Σ_k (R_k − mean R) ε_k / (n σ)   （ε_k ~ N(0,1) の摂動を各重みに加えて評価）
-  「評価点だけを稼ぐ挙動」の確認: 反復ごとに mean_D / mean_F（自分の評価点の平均）と勝率を並べて記録する。
-  評価点が上がるのに勝率が上がらない・自爆率が上がる場合は報酬ハックの疑い。
-使い方: python -m bomberman_ai.cli train --role defense --iters 3 --pop 6 --games 4 --seed 0 --out runs/model.json"""
-import json, os, random, time
-from typing import Dict
-from . import defense as D
-from . import offense as F
+Fitness is a measured outcome, never D/F themselves. Common random seeds and
+paired perturbations reduce evaluation noise; archived policies avoid moving
+opponents within an iteration. Optional scenario starts provide terminal
+signals when the open-board duel is all draws.
+"""
+import copy
+import json
+import os
+import random
+import time
+from . import defense as D, offense as F
 from .agents import CombinedAgent, make_agent
 from .evaluate import match
+from .state import GameState, Bomb
 
 
-def reward_of(result: Dict) -> float:
-    # match() は複数試合の平均指標を返すので、そこから期待報酬を作る
-    r = result["win_rate"] - result["loss_rate"] - 0.5 * result["self_kill_rate"]
-    r += 0.1 * min(1.0, result["mean_frames"] / float(result.get("max_frames", 7200)))
-    # 形づくり（shaping）: 勝敗が付かない対戦でも勾配が出るよう、相手の逃走路を減らした量と設置数を小さく足す。
-    # 主目的は勝敗と生存なので重みは小さい。これらだけが伸びて勝率が伸びないなら「評価点稼ぎ」を疑う（ログの mean_routes_cut を見る）
-    r += 0.2 * min(1.0, result["mean_routes_cut"] / 2.0) + 0.05 * min(1.0, result["bombs_placed"] / (10.0 * result["games"]))
-    return r
+def outcome(result):
+    return (result['win_rate'] - result['loss_rate'] - 0.5*result['self_kill_rate']
+            + 0.25*result.get('kills', 0)/max(1, result['games']))
 
 
-def train(role: str = "defense", iters: int = 3, pop: int = 6, games: int = 4, seed: int = 0, sigma: float = 0.3, lr: float = 0.5,
-          opponent: str = "rule", model: Dict = None, out: str = "runs/model.json", log_path: str = None, max_frames: int = 7200) -> Dict:
+def reward_of(result, shaping=0.0):
+    # No bomb-spam or survival-duration bonus. Optional bounded auxiliary term.
+    return outcome(result) + shaping * max(-1, min(1, result['mean_routes_cut']/4))
+
+
+def curriculum_start(seed):
+    """Synthetic tactical exercises, explicitly separate from normal evaluation."""
     rng = random.Random(seed)
-    model = dict(model or {})
-    wD = dict(model.get("wD") or D.DEFAULT_WEIGHTS)
-    wF = dict(model.get("wF") or F.DEFAULT_WEIGHTS)
-    target = wD if role == "defense" else wF
-    fixed_keys = {"dead", "self_dead"}  # 拒否条件の重みは学習しない
-    keys = [k for k in target if k not in fixed_keys]
-    history = model.get("history", [])
-    log = open(log_path, "a", encoding="utf-8") if log_path else None
+    layouts = [((0, 0), (2, 0)), ((2, 2), (4, 2)), ((6, 4), (6, 6)), ((10, 8), (12, 8))]
+    p0, p1 = layouts[rng.randrange(len(layouts))]
+    s = GameState.initial(p0, p1)
+    # A live bomb creates an actual terminal challenge, not a shaped score.
+    owner = rng.randrange(2)
+    p = s.players[owner]
+    s.bombs = [Bomb(0, p.c, p.r, owner, 0, rng.choice((24, 42, 60)))]
+    s.next_bomb_id = 1
+    return s
 
-    def evaluate_weights(w: Dict[str, float], it: int, k: int) -> Dict:
-        m = {"wD": wD if role != "defense" else w, "wF": wF if role != "offense" else w}
-        a = CombinedAgent(m["wD"], m["wF"])
-        b = make_agent(opponent, model) if opponent != "self" else CombinedAgent(wD, wF)
-        return match(a, b, games, seed=seed * 1000 + it * 100 + k * 10, max_frames=max_frames)
+
+def _average(results):
+    n = sum(r['games'] for r in results)
+    out = {key: sum(r.get(key, 0)*r['games'] for r in results)/n
+           for key in ('win_rate', 'loss_rate', 'draw_rate', 'self_kill_rate',
+                       'mean_D', 'mean_F', 'mean_routes_cut', 'mean_frames')}
+    out.update(games=n, kills=sum(r['kills'] for r in results),
+               bombs_placed=sum(r['bombs_placed'] for r in results))
+    out['attack_success_rate'] = out['kills']/max(1, out['bombs_placed'])
+    return out
+
+
+def train(role='defense', iters=3, pop=8, games=8, seed=0, sigma=0.2, lr=0.1,
+          opponent='self', model=None, out='runs/model.json', log_path=None,
+          max_frames=7200, curriculum=False, shaping=0.0, pool_size=4):
+    if role not in ('defense', 'offense'): raise ValueError('invalid role')
+    if pop < 2 or pop % 2 or games < 1 or iters < 0 or sigma <= 0 or lr < 0 or pool_size < 1:
+        raise ValueError('positive sigma/games/pool; even population >= 2 required')
+    rng = random.Random(seed)
+    model = copy.deepcopy(model or {})
+    wD = {**D.DEFAULT_WEIGHTS, **model.get('wD', {})}
+    wF = {**F.DEFAULT_WEIGHTS, **model.get('wF', {})}
+    mix = model.get('mix', 0.3)
+    history = list(model.get('history', []))
+    pool = copy.deepcopy(model.get('pool', []))[-pool_size:]
+    target = wD if role == 'defense' else wF
+    keys = [k for k in target if k not in ('dead', 'self_dead')]
+    os.makedirs(os.path.dirname(out) or '.', exist_ok=True)
+    if log_path: os.makedirs(os.path.dirname(log_path) or '.', exist_ok=True)
 
     for it in range(iters):
-        t0 = time.time()
-        base = evaluate_weights(target, it, 0)
-        eps = []
-        rewards = []
-        for k in range(pop):
-            e = {key: rng.gauss(0, 1) for key in keys}
-            w = {key: target[key] + sigma * e[key] for key in keys}
-            w.update({key: target[key] for key in fixed_keys if key in target})
-            res = evaluate_weights(w, it, k + 1)
-            eps.append(e)
-            rewards.append(reward_of(res))
-        mean_r = sum(rewards) / len(rewards)
-        std = (sum((r - mean_r) ** 2 for r in rewards) / len(rewards)) ** 0.5 or 1.0
+        started = time.monotonic()
+        # Both current and previous self policies are immutable for this round.
+        frozen = [{'wD': dict(wD), 'wF': dict(wF), 'mix': mix}] + copy.deepcopy(pool)
+        if opponent == 'self':
+            rivals = [('combined', frozen[0]), ('rule', {}), ('combined', {})] + [('combined', m) for m in frozen[1:]]
+        else:
+            rivals = [(opponent, {})]
+
+        def evaluate_weights(weights, holdout=False):
+            aD = weights if role == 'defense' else wD
+            aF = weights if role == 'offense' else wF
+            rows = []
+            # Identical opponent schedule, seeds and starting states for every
+            # perturbation. Seats alternate independently of opponent selection.
+            for g in range(games):
+                kind, rival = rivals[(g//2+it) % len(rivals)]
+                gs = seed*10000 + it*100 + g//2 + (1000000 if holdout else 0)
+                start = curriculum_start(gs) if curriculum else None
+                rows.append(match(CombinedAgent(aD, aF, mix), make_agent(kind, rival),
+                                  1, seed=gs, max_frames=max_frames, swap_sides=False,
+                                  first_seat=g % 2, start=start))
+            return _average(rows)
+
+        base = evaluate_weights(target)
+        eps, rewards = [], []
+        terminal_signal = base["win_rate"] + base["loss_rate"] + base["self_kill_rate"] > 0
+        for _ in range(pop//2):
+            e = {k: rng.gauss(0, 1) for k in keys}
+            for sign in (1, -1):
+                perturb = {k: sign*v for k, v in e.items()}
+                candidate = dict(target)
+                candidate.update({k: target[k]+sigma*perturb[k] for k in keys})
+                res = evaluate_weights(candidate)
+                terminal_signal |= res["win_rate"] + res["loss_rate"] + res["self_kill_rate"] > 0
+                eps.append(perturb)
+                rewards.append(reward_of(res, shaping))
+        proposal = dict(target)
+        centre = sum(rewards)/pop
         for key in keys:
-            g = sum((r - mean_r) / std * e[key] for r, e in zip(rewards, eps)) / (pop * sigma)
-            target[key] += lr * g
-        rec = {"iter": it, "role": role, "base_reward": round(reward_of(base), 3), "pop_mean_reward": round(mean_r, 3),
-               "win_rate": base["win_rate"], "self_kill_rate": base["self_kill_rate"], "mean_D": round(base["mean_D"], 3),
-               "mean_F": round(base["mean_F"], 3), "mean_routes_cut": round(base["mean_routes_cut"], 3), "seconds": round(time.time() - t0, 1)}
+            gradient = sum((r-centre)*e[key] for r, e in zip(rewards, eps))/(pop*sigma)
+            delta = max(-0.25, min(0.25, lr*gradient))
+            proposal[key] = max(-10, min(10, target[key]+delta))
+        validation_before = evaluate_weights(target, holdout=True)
+        validation_after = evaluate_weights(proposal, holdout=True) if proposal != target else validation_before
+        accepted = (outcome(validation_after) > outcome(validation_before)+1e-12
+                    and validation_after['self_kill_rate'] <= validation_before['self_kill_rate'])
+        score_rise = (validation_after['mean_D'] > validation_before['mean_D']+1e-6
+                      or validation_after['mean_F'] > validation_before['mean_F']+1e-6)
+        score_only = score_rise and outcome(validation_after) <= outcome(validation_before)+1e-12
+        if accepted:
+            pool.append({'wD': dict(wD), 'wF': dict(wF), 'mix': mix})
+            pool = pool[-pool_size:]
+            target.update(proposal)
+        after = validation_after if accepted else validation_before
+        rec = {'iter': len(history), 'role': role, 'opponent': opponent,
+               'curriculum': curriculum, 'population': pop, 'games': games,
+               'pool_policies': len(frozen), 'base_reward': reward_of(base, shaping),
+               'pop_mean_reward': centre, 'reward_spread': max(rewards)-min(rewards),
+               'accepted': accepted, 'score_only_improvement': score_only,
+               'flat_fitness': all(r == rewards[0] for r in rewards),
+               'no_terminal_signal': not terminal_signal,
+               'before': validation_before, 'proposed': validation_after,
+               **{k: after[k] for k in ('win_rate', 'self_kill_rate', 'attack_success_rate',
+                                       'mean_D', 'mean_F', 'mean_routes_cut')},
+               'seconds': round(time.monotonic()-started, 2)}
         history.append(rec)
-        line = json.dumps(rec, ensure_ascii=False)
-        print(line, flush=True)
-        if log:
-            log.write(line + "\n")
-            log.flush()
-        model = {"wD": wD, "wF": wF, "mix": model.get("mix", 0.3), "history": history, "seed": seed, "role_last": role}
-        os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
-        json.dump(model, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+        print(json.dumps(rec, ensure_ascii=False), flush=True)
+        if log_path:
+            with open(log_path, 'a', encoding='utf-8') as f: f.write(json.dumps(rec)+'\n')
+        model = {'wD': wD, 'wF': wF, 'mix': mix, 'history': history, 'pool': pool,
+                 'seed': seed, 'role_last': role,
+                 'training': {'sigma': sigma, 'lr': lr, 'pop': pop, 'games': games,
+                              'opponent': opponent, 'curriculum': curriculum, 'shaping': shaping}}
+        with open(out, 'w', encoding='utf-8') as f: json.dump(model, f, indent=2)
     return model

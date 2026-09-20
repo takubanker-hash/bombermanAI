@@ -19,7 +19,7 @@ THROW_WINDUP = 6      # 仮定: 投げの振りかぶり動作。入力してか
 KICK_WINDUP = 6       # 仮定: キックの蹴り込み動作。入力してから爆弾が実際に滑り出すまでの硬直
                       # （ユーザー確認: 足元に置いた爆弾はその場では蹴れず、隣接マスから助走して蹴り込む必要があり、その蹴り込み動作自体にも時間がかかる）
 MAX_BOMBS = 8        # 仮定: 同時に置ける爆弾 8 個（ギンギンパワー＝最大）
-TIME_LIMIT = 120 * FPS   # 確認済み: 制限時間 2:00（時間切れ・ステージ縮小は本シミュレータでは未実装）
+TIME_LIMIT = 120 * FPS   # 確認済み: 制限時間 2:00（時間切れは引き分け。ステージ縮小は未実装）
 PICKUP_FRAMES = 6    # 仮定: 爆弾を拾い上げる動作 6 コマ
 
 def is_pillar(c, r):
@@ -30,3 +30,9 @@ def in_board(c, r):
     return 0 <= c < COLS and 0 <= r < ROWS
 
 DIRS = {"U": (0, -1), "D": (0, 1), "L": (-1, 0), "R": (1, 0)}
+
+# Calibration provenance: no measurement CSV/video was provided with this repo.
+# Do not relabel these assumptions as measurements without sample/source evidence.
+UNMEASURED_PARAMETERS = ("KICK_STEP", "FLY_FRAMES", "STUN", "ACTION_LAG",
+                         "MAX_BOMBS", "THROW_DIST", "PICKUP_FRAMES",
+                         "PUNCH_WINDUP", "THROW_WINDUP", "KICK_WINDUP")

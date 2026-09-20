@@ -78,4 +78,55 @@ python -m bomberman_ai.cli evaluate --games 6 --seed 100 --max-frames 1800 --mod
 
 `bridge/from_analysis.py` が `report/replay_data.js` の場面の 1 コマを GameState にする。
 `python bridge/from_analysis.py ../bomberman-analysis/report/replay_data.js 600` で、実戦の局面を AI に見せて行動を比べられる。
-解析側の「逃げ込めるマス」（`analysis/escape.py`）と `safety.py` は同じ定義なので、値を突き合わせて検証できる。
+解析側の「逃げ込めるマス」（`analysis/escape.py`）とは誘爆・飛行等の扱いが異なるため、定義差を確認して検証する。
+
+## GPT 改修版：比較・自己対戦・安全判定
+
+`GameState`と`"<移動>/<操作>"`、bridgeの入力形式は互換。新規の
+`bomberman_ai/temporal.py`はエンジン共通の危険予測と時間付き移動探索を提供する。
+適用範囲はSPEC末尾を参照。`trap`は固定爆弾下で移動だけでは生存できないという
+特徴量であり、相手が爆弾を動かせる場合の詰み証明ではない。
+
+Dは安全な局所移動領域と相手による接近圧力を追加し、永久避難先がないときは炎消滅後の
+逃走も調べる。Fは爆発後までの生存領域、飛行・滑走による干渉、拾う→投げる／向き変更→
+パンチの短い準備を評価する。準備は次の判断で再計画し、実行するのは最初の合法行動のみ。
+柱を迂回する距離を使い、単なる時間経過による自由度低下を攻撃の成果に数えない。
+
+```bash
+python -m pytest -q
+python -m bomberman_ai.cli evaluate --games 4 --seed 100 --max-frames 1800 --out runs/before.json
+python -m bomberman_ai.cli train --role defense --opponent self --iters 2 --pop 8 --games 8 --seed 7 --max-frames 1800 --out runs/new_model.json
+python -m bomberman_ai.cli train --role offense --opponent self --iters 2 --pop 8 --games 8 --seed 8 --max-frames 1800 --model runs/new_model.json --out runs/new_model.json
+python -m bomberman_ai.cli evaluate --games 4 --seed 100 --max-frames 1800 --model runs/new_model.json --out runs/after.json
+```
+
+`--curriculum`で近接・短い残り時間の爆弾を持つ人工局面から学習できる。通常の初期盤面での
+勝率と混ぜない。`--pop`は2以上の偶数。`--lr 0.1 --sigma 0.2 --pool-size 4`が既定。
+自己対戦は現在の重みの凍結コピー、rule、手動の初期重み、過去の採用モデルを対戦相手にする。
+同じ反復では対戦条件を固定し、±の摂動で比較。別シードの検証で成績が改善し、自爆率が
+悪化しない場合のみ採用する。採用されず重みが変わらない反復も正常な結果。
+
+既定報酬は勝率−敗率−0.5×自爆率＋0.25×相手を自分の爆弾で倒した試合率。
+D/Fの値、設置回数、長く引き分けた時間は報酬にしない。`--shaping`は既定0。
+任意で小さな逃走路削減の補助報酬を設定できるが、採用判定は補助報酬を含めない。
+ログには`before/proposed`、採否、mean_D/F、勝率・自爆率・攻撃成功率、`score_only_improvement`、
+`flat_fitness`、`no_terminal_signal`を記録する。検証用シードも反復内で固定されるため、
+多数回の探索後はさらに独立した最終評価が必要。
+
+評価は各試合でAIを作り直す。`bombs_placed`は実際に成功した設置数。
+`attack_success_rate`は「相手を自分所有の爆弾で倒した数÷設置成功数」で、試合勝率とは異なる。
+所有者で帰属するため、相手所有の爆弾を蹴り返して倒した場合や誘爆の因果的な貢献を完全には
+測れない。`mean_routes_cut`は攻撃と数えた判断時の符号付き平均で、負なら逃走路を増やした。
+`mean_D/F`は重みと特徴量定義の変更に影響され、バージョンを跨ぐ値だけでは強さを比較できない。
+`untrained`は**現在のコードの手動初期重み**。改修前AIとの対戦を意味しない。
+
+4試合は動作と退行の確認用。決定論的なrule/untrained戦では、シードを変えても初期盤面と
+方策が同じなら同じ対戦になる。試合数だけを増やした数字を独立サンプル数と見なさない。
+
+
+## 発動前硬直の統合後の再評価
+
+`Player.queued`（上流c2380f7）を安全予測にも反映した。古いJSONにqueuedがない場合はNone。
+bridgeは映像から予約中の動作を復元できないため、現状はNoneを初期値とする。
+旧モデルの成績を新ルールで保証するものではない。比較表の00〜09は旧ルール、10以降は
+発動前硬直を含む新ルール。最新の結果は [experiments/RESULTS.md](experiments/RESULTS.md)。

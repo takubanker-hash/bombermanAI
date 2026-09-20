@@ -1,0 +1,32 @@
+{
+  "wD": {
+    "safe_area": 1.0,
+    "routes": 0.8,
+    "slack": 1.0,
+    "on_line": -1.0,
+    "mobility": 0.4,
+    "deadend": -0.6,
+    "own_danger": -0.8,
+    "dist_opp": 0.0,
+    "opponent_control": -0.6,
+    "dead": -100.0
+  },
+  "wF": {
+    "area_cut": 4.0,
+    "routes_cut": 3.0,
+    "future_cut": 2.0,
+    "chain": 0.0,
+    "timing": 1.5,
+    "self_area": 0.3,
+    "self_dead": -100.0,
+    "lag_danger": -1.5,
+    "kill": 10.0,
+    "robust": 2.0,
+    "approach": 0.6,
+    "proximity": 0.4,
+    "trap": 6.0,
+    "long_cut": 0.5,
+    "intercept": 0.8
+  },
+  "mix": 0.15
+}

@@ -1,14 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Safety Solver: 爆発時刻と移動速度を考慮して「逃げ込めるマス」を求める（動画解析の escape.py と同じ考え方）。
+"""Safety features, temporal reachability and bounded simultaneous min-max.
 
-考え方（時間つき安全地帯）:
-  - 各マスが燃え始める時刻 L を、地面の爆弾の爆発予定と爆風の届く範囲から作る。爆風でつながる爆弾は最も早い爆弾に合わせて爆発する
-    （誘爆の遅れ CHAIN_DELAY は安全側に無視）。いま燃えているマスは L = 今。
-  - 最初の爆発までの時間（budget）内に、1 マス SPEED コマで走って着ける場所のうち、通り道のどのマスも
-    燃え始める MARGIN コマ前までに通り抜けられ、着いた先が爆風線上でないマスを「逃げ込めるマス」とする。
-  - 抱えられている爆弾・飛んでいる爆弾は位置が確定しないので、爆風線には入れない（攻撃側はこれを利用できる）。
-  - これは「相手が何もしない」前提の安全であり、必ず生き残れる保証ではない（相手のキック・パンチ・投げで変わる）。
-返り値は集合と付随情報。決定論的。移動コストが一定なので幅優先探索で解く（速さのため）。"""
+Refuge features are conservative fixed-action forecasts. Only bounded_minimax
+uses all legal joint actions, and its certificate ends at its stated horizon.
+"""
 from typing import Dict, Tuple, Set, Optional, List
 from .constants import COLS, ROWS, FIRE, SPEED, DIRS, in_board, is_pillar
 from .state import GameState
@@ -18,59 +13,15 @@ _DIRS = [("U", 0, -1), ("D", 0, 1), ("L", -1, 0), ("R", 1, 0)]
 _PILLAR = [[is_pillar(c, r) for r in range(ROWS)] for c in range(COLS)]
 
 
-def burn_schedule(state: GameState, now: int) -> Tuple[Dict[Tuple[int, int], int], Set[Tuple[int, int]]]:
-    """各マスが燃え始める時刻 L と、地面の爆弾のマス（通れない）を返す。同じ状態では結果をキャッシュする"""
-    key = (now, len(state.flames), tuple((b.id, b.c, b.r, b.explode_at, b.held, b.fly_to) for b in state.bombs))
-    cache = getattr(state, "_bs", None)
-    if cache is not None and cache[0] == key:
-        return cache[1], cache[2]
-    bombs = [b for b in state.bombs if b.on_ground() and b.explode_at >= 0]
-    tile_of = {(b.c, b.r): i for i, b in enumerate(bombs)}
-    lines: List[List[Tuple[int, int]]] = []
-    for b in bombs:
-        ln = [(b.c, b.r)]
-        for _, dx, dy in _DIRS:
-            c, r = b.c, b.r
-            for _ in range(FIRE):
-                c += dx
-                r += dy
-                if not (0 <= c < COLS and 0 <= r < ROWS) or _PILLAR[c][r]:
-                    break
-                ln.append((c, r))
-                if (c, r) in tile_of:
-                    break
-        lines.append(ln)
-    parent = list(range(len(bombs)))
+def burn_schedule(state: GameState, now: int):
+    """First ignition under fixed future actions, including flights and chain delay.
 
-    def find(i):
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
-
-    for i, ln in enumerate(lines):
-        for t in ln:
-            j = tile_of.get(t)
-            if j is not None and j != i:
-                parent[find(i)] = find(j)
-    gt: Dict[int, int] = {}
-    for i, b in enumerate(bombs):
-        g = find(i)
-        gt[g] = min(gt.get(g, INF), b.explode_at)
-    L: Dict[Tuple[int, int], int] = {}
-    for i, ln in enumerate(lines):
-        v = gt[find(i)]
-        for t in ln:
-            if v < L.get(t, INF):
-                L[t] = v
-    for t in state.flames:
-        L[t] = min(L.get(t, INF), now)
-    bt = set(tile_of.keys())
-    try:
-        state._bs = (key, L, bt)
-    except Exception:
-        pass
-    return L, bt
+    Unlike the old union-find approximation, rays are recomputed after each
+    explosion. This is a forecast, NOT adversarial safety certification.
+    """
+    from .temporal import forecast
+    tl = forecast(state)
+    return tl.first, tl.bomb_tiles
 
 
 def first_explosion(state: GameState) -> int:
@@ -78,59 +29,93 @@ def first_explosion(state: GameState) -> int:
     now = state.frame
     budget = INF
     for b in state.bombs:
-        if b.on_ground() and 0 <= b.explode_at:
+        if not b.held and 0 <= b.explode_at:
             budget = min(budget, b.explode_at - now)
     for (until, _) in state.flames.values():
         budget = min(budget, until - now)
-    return budget
+    from .constants import FUSE
+    for b in state.bombs:
+        if b.fly_to is not None:
+            when = b.explode_at if b.explode_at >= b.land_at else b.land_at + FUSE
+            budget = min(budget, when-now)
+    return max(0, budget)
 
 
 def escape_area(state: GameState, i: int, margin: int = 0, max_tiles: Optional[int] = None, delay: int = 0):
-    """プレイヤー i が逃げ込めるマスの集合と情報 dict(budget, dist, first, L)。
-    dist: 各マスへの到達コマ数、first: そのマスへ最短で行くときの最初の方向（逃走路の数え上げに使う）。
-    delay = 反応の遅れ（コマ）。margin = 燃え始めの何コマ前までに通り抜ける必要があるか（実戦の余裕。シミュレータ内は 0 で厳密）"""
+    """Conservative refuge feature, with one label per FIRST departure direction.
+
+    Distinct first departures are alternatives, not vertex-disjoint paths.
+    Use temporal.survival for waiting/re-entry after flames have expired.
+    """
+    from collections import deque
+    from .temporal import state_signature
+    key = (state_signature(state), i, margin, max_tiles, delay)
+    cache = getattr(state, '_areas', {})
+    if key in cache: return cache[key]
     p = state.players[i]
     now = state.frame
     L, bomb_tiles = burn_schedule(state, now)
     budget = first_explosion(state)
-    c0, r0 = p.tile()
-    start_cost = (SPEED - p.prog) if p.prog else 0
-    dist: Dict[Tuple[int, int], int] = {(c0, r0): start_cost}
-    first: Dict[Tuple[int, int], str] = {(c0, r0): ""}
-    safe: Set[Tuple[int, int]] = set()
-    limit = budget - delay
-    if max_tiles is not None:
-        limit = min(limit, max_tiles * SPEED)
-    frontier = [(c0, r0)]
-    a = start_cost
-    while frontier:
-        nxt = []
-        for (c, r) in frontier:
-            if (c, r) not in L:
-                safe.add((c, r))
-            a2 = a + SPEED
-            if a2 > limit:
-                continue
-            f0 = first[(c, r)]
-            for name, dx, dy in _DIRS:
-                cc, rr = c + dx, r + dy
-                if not (0 <= cc < COLS and 0 <= rr < ROWS) or _PILLAR[cc][rr] or (cc, rr) in bomb_tiles or (cc, rr) in dist:
-                    continue
-                lt2 = L.get((cc, rr))
-                if lt2 is not None and (now + delay + a2) > lt2 - margin:
-                    continue
-                dist[(cc, rr)] = a2
-                first[(cc, rr)] = f0 or name
-                nxt.append((cc, rr))
-        frontier = nxt
-        a += SPEED
-    return safe, {"budget": budget, "dist": dist, "first": first, "L": L}
+    start = p.tile()
+    initial = max(delay, p.stun_until-now, p.lag_until-now, 0)
+    if p.prog: initial += SPEED-p.prog
+    dist, first, safe, routes = {start: initial}, {start: ''}, set(), set()
+    limit = budget
+    if max_tiles is not None: limit = min(limit, max_tiles * SPEED)
+    queue = deque([(start, initial, '')]) if p.alive else deque()
+    visited = {start}
+    while queue:
+        cell, cost, direction = queue.popleft()
+        if cell not in L:
+            safe.add(cell)
+            if direction: routes.add(direction)
+        # Until the halfway crossing, the source tile remains occupied.
+        if now + cost + SPEED//2 - 1 + margin >= L.get(cell, INF): continue
+        arrival = cost + SPEED
+        if arrival > limit: continue
+        for name, dx, dy in _DIRS:
+            nxt = (cell[0]+dx, cell[1]+dy)
+            label = direction or name
+            if (not in_board(*nxt) or is_pillar(*nxt) or nxt in bomb_tiles
+                    or nxt == start or nxt in visited): continue
+            if now + arrival + margin >= L.get(nxt, INF): continue
+            visited.add(nxt)
+            if arrival < dist.get(nxt, INF):
+                dist[nxt], first[nxt] = arrival, label
+            queue.append((nxt, arrival, label))
+    # Check each initial departure independently. Stop as soon as ONE refuge
+    # is found; unlike the old shortest-path tree this preserves merging routes.
+    routes = set()
+    for name, dx, dy in _DIRS:
+        cell = (start[0]+dx, start[1]+dy)
+        at = initial+SPEED
+        if (not in_board(*cell) or is_pillar(*cell) or cell in bomb_tiles or at > limit
+                or now+initial+SPEED//2-1+margin >= L.get(start, INF)
+                or now+at+margin >= L.get(cell, INF)): continue
+        pending, seen = deque([(cell, at)]), {start, cell}
+        while pending:
+            cur, cost = pending.popleft()
+            if cur not in L:
+                routes.add(name)
+                break
+            if cost+SPEED > limit or now+cost+SPEED//2-1+margin >= L.get(cur, INF): continue
+            for _, xx, yy in _DIRS:
+                nxt = (cur[0]+xx, cur[1]+yy)
+                if (nxt in seen or not in_board(*nxt) or is_pillar(*nxt) or nxt in bomb_tiles
+                        or now+cost+SPEED+margin >= L.get(nxt, INF)): continue
+                seen.add(nxt)
+                pending.append((nxt, cost+SPEED))
+    result = safe, {'budget': budget, 'dist': dist, 'first': first, 'L': L,
+                    'route_directions': routes}
+    cache[key] = result
+    state._areas = cache
+    return result
 
 
 def escape_routes(state: GameState, i: int, margin: int = 0) -> int:
     """逃走路の数: 最初の一歩の方向のうち、その先に逃げ込めるマスがあるものの数（0〜4）"""
     safe, info = escape_area(state, i, margin=margin)
-    return len({info["first"][t] for t in safe if info["first"].get(t)})
+    return len(info["route_directions"])
 
 
 def time_slack(state: GameState, i: int) -> int:
@@ -184,3 +169,50 @@ def reachable_tiles(state: GameState, i: int, frames: int) -> Set[Tuple[int, int
                     nxt.append((cc, rr))
         frontier = nxt
     return seen
+
+
+def bounded_minimax(state, me, action=None, frames=2, max_nodes=256):
+    """Finite-horizon ∃my action ∀opponent action, using the actual engine.
+
+    All legal operations (placement, kick, punch, pickup, throw) are included.
+    Returns safe/unsafe/unknown; budget exhaustion is NEVER a safe certificate.
+    'safe' means alive through `frames` only, not through all future explosions.
+    """
+    from .actions import legal_actions
+    from .engine import step
+    from .temporal import state_signature
+    if frames < 0 or max_nodes < 1: raise ValueError('invalid search budget')
+    nodes, memo = 0, {}
+    def search(s, depth, forced=None):
+        nonlocal nodes
+        if not s.players[me].alive: return 'unsafe'
+        if s.done() or depth == 0: return 'safe'
+        key = (state_signature(s), depth, forced)
+        if key in memo: return memo[key]
+        if nodes >= max_nodes: return 'unknown'
+        mine = [forced] if forced is not None else legal_actions(s, me)
+        theirs = legal_actions(s, 1-me)
+        any_unknown = False
+        for a in mine:
+            worst = 'safe'
+            for b in theirs:
+                if nodes >= max_nodes:
+                    worst = 'unknown'
+                    break
+                nodes += 1
+                t = step(s, a, b) if me == 0 else step(s, b, a)
+                status = search(t, depth-1)
+                if status == 'unsafe':
+                    worst = 'unsafe'
+                    break
+                if status == 'unknown': worst = 'unknown'
+            if worst == 'safe':
+                memo[key] = 'safe'
+                return 'safe'
+            any_unknown |= worst == 'unknown'
+        result = 'unknown' if any_unknown else 'unsafe'
+        memo[key] = result
+        return result
+    status = search(state.copy(light=True), frames, action)
+    return {'status': status, 'frames': frames, 'nodes': nodes,
+            'scope': 'all_legal_joint_actions_finite_horizon'}

@@ -24,10 +24,15 @@ def main(argv=None):
     t = sub.add_parser("train")
     t.add_argument("--role", choices=["defense", "offense"], default="defense")
     t.add_argument("--iters", type=int, default=3)
-    t.add_argument("--pop", type=int, default=6)
-    t.add_argument("--games", type=int, default=4)
+    t.add_argument("--pop", type=int, default=8)
+    t.add_argument("--games", type=int, default=8)
     t.add_argument("--seed", type=int, default=0)
-    t.add_argument("--opponent", default="rule")
+    t.add_argument("--opponent", default="self")
+    t.add_argument("--sigma", type=float, default=0.2)
+    t.add_argument("--lr", type=float, default=0.1)
+    t.add_argument("--curriculum", action="store_true")
+    t.add_argument("--shaping", type=float, default=0.0)
+    t.add_argument("--pool-size", type=int, default=4)
     t.add_argument("--model", default="")
     t.add_argument("--out", default="runs/model.json")
     e = sub.add_parser("evaluate")
@@ -51,11 +56,13 @@ def main(argv=None):
         print(json.dumps(res, ensure_ascii=False, indent=1))
     elif a.cmd == "train":
         train(a.role, a.iters, a.pop, a.games, a.seed, opponent=a.opponent, model=load_model(a.model), out=a.out,
-              log_path=os.path.splitext(a.out)[0] + "_log.jsonl", max_frames=a.max_frames)
+              log_path=os.path.splitext(a.out)[0] + "_log.jsonl", max_frames=a.max_frames,
+              sigma=a.sigma, lr=a.lr, curriculum=a.curriculum, shaping=a.shaping, pool_size=a.pool_size)
     elif a.cmd == "evaluate":
         res = evaluate_suite(load_model(a.model), a.games, a.seed, max_frames=a.max_frames)
         print(table(res))
         if a.out:
+            os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
             json.dump(res, open(a.out, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     elif a.cmd == "replay":
         s0, acts, meta = R.load(a.file)

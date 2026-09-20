@@ -1,0 +1,21 @@
+{
+  "rule": {
+    "seed": 100,
+    "swap_sides": true,
+    "metrics_version": 2,
+    "games": 2,
+    "max_frames": 1800,
+    "win_rate": 0.5,
+    "loss_rate": 0.0,
+    "draw_rate": 0.5,
+    "self_kill_rate": 0.0,
+    "attack_success_rate": 0.008849557522123894,
+    "kills": 1,
+    "bombs_placed": 113,
+    "mean_frames": 1668.0,
+    "mean_routes_cut": 0.5601617795753286,
+    "mean_D": -0.08761152860020943,
+    "mean_F": 1.016198294425776,
+    "seconds": 47.6
+  }
+}
