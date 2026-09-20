@@ -1,6 +1,6 @@
 # HANDOFF — GPT への引き継ぎ
 
-作成: 2026-09-20（Claude）。対象ブランチ: `main`（ローカル Git リポジトリ。GitHub への push は未実施 → 下記「共有」）。
+作成: 2026-09-20（Claude）。リポジトリ: https://github.com/takubanker-hash/bombermanAI 、対象ブランチ: `main`。
 
 ## いま動く範囲
 
@@ -73,8 +73,7 @@
 
 ## 共有
 
-- ローカル Git（`bomberman-ai/.git`）に履歴あり。GitHub の CLI が無く、リモートは作っていない。
-  push するには: `git remote add origin <URL>` → `git push -u origin main`。
+- GitHub: https://github.com/takubanker-hash/bombermanAI （main に push 済み）。`git clone https://github.com/takubanker-hash/bombermanAI.git`
 - リポジトリ一式（履歴つき）を渡す場合: `git bundle create bomberman-ai.bundle --all`（受け取り側は `git clone bomberman-ai.bundle`）。
 - 秘密情報・個人データは含めていない（配信者名は SPEC.md にも書いていない）。
 
