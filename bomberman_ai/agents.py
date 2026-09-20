@@ -154,7 +154,7 @@ class CombinedAgent(Agent):
     判断はマスの中心で行い、危険が無い間は SPEED コマに 1 回だけ考える（速さのため）。"""
     name = "combined"
 
-    def __init__(self, wD: Dict[str, float] = None, wF: Dict[str, float] = None, mix: float = 0.5, with_robust: bool = True):
+    def __init__(self, wD: Dict[str, float] = None, wF: Dict[str, float] = None, mix: float = 0.3, with_robust: bool = True):
         self.wD = dict(wD or D.DEFAULT_WEIGHTS)
         self.wF = dict(wF or F.DEFAULT_WEIGHTS)
         self.mix = mix
@@ -215,7 +215,7 @@ def make_agent(kind: str, model: dict = None) -> Agent:
     if kind == "offense":
         return OffenseAgent(model.get("wF"))
     if kind == "combined":
-        return CombinedAgent(model.get("wD"), model.get("wF"), model.get("mix", 0.5))
+        return CombinedAgent(model.get("wD"), model.get("wF"), model.get("mix", 0.3))
     raise ValueError(kind)
 
 

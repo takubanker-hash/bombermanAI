@@ -14,7 +14,9 @@
   self_dead     先読みで自分が死ぬなら 1（拒否）
   lag_danger    硬直を伴う行動で、硬直中に自分のマスが燃えるなら 1
   kill          先読みで相手が死ぬなら 1
-  robust        相手がどう動いても自分に逃げ場が残る割合（相手の行動を固定した安全を保証と扱わないための項）[高価]"""
+  robust        相手がどう動いても自分に逃げ場が残る割合（相手の行動を固定した安全を保証と扱わないための項）[高価]
+  approach      相手との距離の減少 / 2（近づかないと圧力をかけられない）
+  proximity     1 - 相手との距離 / 24"""
 from typing import Dict, List, Tuple, Optional
 from .constants import FUSE, SPEED, ACTION_LAG, PICKUP_FRAMES
 from .state import GameState
@@ -23,13 +25,14 @@ from .engine import step
 from .actions import legal_actions, parse
 from .defense import lookahead
 
-FEATURE_NAMES = ["area_cut", "routes_cut", "future_cut", "chain", "timing", "self_area", "self_dead", "lag_danger", "kill", "robust"]
+FEATURE_NAMES = ["area_cut", "routes_cut", "future_cut", "chain", "timing", "self_area", "self_dead", "lag_danger", "kill", "robust", "approach", "proximity"]
 EXPENSIVE = ("future_cut", "robust")
 TOP_K = 4
 
 DEFAULT_WEIGHTS: Dict[str, float] = {
-    "area_cut": 1.0, "routes_cut": 0.8, "future_cut": 0.6, "chain": 0.3, "timing": 0.5,
+    "area_cut": 1.5, "routes_cut": 1.0, "future_cut": 0.6, "chain": 0.3, "timing": 0.5,
     "self_area": 0.8, "self_dead": -100.0, "lag_danger": -1.5, "kill": 10.0, "robust": 1.0,
+    "approach": 0.3, "proximity": 0.3,
 }
 
 
@@ -107,6 +110,10 @@ def offense_features(s: GameState, me: int, action: str, ctx: Optional[Context] 
     sl_opp = time_slack(t, opp) if q.alive else 0
     timing = 0.0 if sl_opp >= INF else 1.0 - max(0, min(sl_opp, FUSE)) / FUSE
     self_safe, _ = escape_area(t, me)
+    (mc, mr), (oc, orr) = s.players[me].tile(), s.players[opp].tile()
+    d0 = abs(mc - oc) + abs(mr - orr)
+    (mc2, mr2), (oc2, orr2) = p.tile(), q.tile()
+    d1 = abs(mc2 - oc2) + abs(mr2 - orr2)
     mv, act = parse(action)
     lag = act in ("PUNCH", "THROW", "PICKUP")
     sl_me = time_slack(t, me)
@@ -122,6 +129,8 @@ def offense_features(s: GameState, me: int, action: str, ctx: Optional[Context] 
         "lag_danger": lag_danger,
         "kill": 1.0 if not q.alive else 0.0,
         "robust": 1.0,
+        "approach": (d0 - d1) / 2.0,
+        "proximity": 1.0 - min(d1, 24) / 24.0,
     }
     if full:
         add_expensive(s, me, action, f, t, ctx)

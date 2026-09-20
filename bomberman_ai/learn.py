@@ -4,7 +4,7 @@
 
   役割 defense: CombinedAgent の wD を更新（wF 固定）。相手は固定（rule または前回のモデル）
   役割 offense: CombinedAgent の wF を更新（wD 固定）
-  報酬 = 勝ち +1 / 負け -1（自爆なら -1.5）/ 引き分け 0 + 0.1 × 生存時間の割合（時間切れまで）
+  報酬 = 勝ち +1 / 負け -1（自爆なら -1.5）/ 引き分け 0 + 0.1 × 生存時間の割合 + 0.2 × 逃走路の削減（上限1）+ 0.05 × 設置数（上限1）
   更新: w ← w + lr × Σ_k (R_k − mean R) ε_k / (n σ)   （ε_k ~ N(0,1) の摂動を各重みに加えて評価）
   「評価点だけを稼ぐ挙動」の確認: 反復ごとに mean_D / mean_F（自分の評価点の平均）と勝率を並べて記録する。
   評価点が上がるのに勝率が上がらない・自爆率が上がる場合は報酬ハックの疑い。
@@ -21,6 +21,9 @@ def reward_of(result: Dict) -> float:
     # match() は複数試合の平均指標を返すので、そこから期待報酬を作る
     r = result["win_rate"] - result["loss_rate"] - 0.5 * result["self_kill_rate"]
     r += 0.1 * min(1.0, result["mean_frames"] / float(result.get("max_frames", 7200)))
+    # 形づくり（shaping）: 勝敗が付かない対戦でも勾配が出るよう、相手の逃走路を減らした量と設置数を小さく足す。
+    # 主目的は勝敗と生存なので重みは小さい。これらだけが伸びて勝率が伸びないなら「評価点稼ぎ」を疑う（ログの mean_routes_cut を見る）
+    r += 0.2 * min(1.0, result["mean_routes_cut"] / 2.0) + 0.05 * min(1.0, result["bombs_placed"] / (10.0 * result["games"]))
     return r
 
 
@@ -68,7 +71,7 @@ def train(role: str = "defense", iters: int = 3, pop: int = 6, games: int = 4, s
         if log:
             log.write(line + "\n")
             log.flush()
-        model = {"wD": wD, "wF": wF, "mix": model.get("mix", 0.5), "history": history, "seed": seed, "role_last": role}
+        model = {"wD": wD, "wF": wF, "mix": model.get("mix", 0.3), "history": history, "seed": seed, "role_last": role}
         os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
         json.dump(model, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     return model

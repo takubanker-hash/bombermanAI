@@ -1,0 +1,80 @@
+{
+ "wD": {
+  "safe_area": 0.07535325404220627,
+  "routes": 1.7762667397257796,
+  "slack": 0.10723009774558902,
+  "on_line": 0.08669163430940785,
+  "mobility": 1.9831468733819564,
+  "deadend": -2.3025511259586735,
+  "own_danger": -1.7715590152501122,
+  "dist_opp": -0.178039023963662,
+  "dead": -100.0
+ },
+ "wF": {
+  "area_cut": 3.4852336737259,
+  "routes_cut": 0.4276070559631852,
+  "future_cut": -0.04088171927810036,
+  "chain": -0.031208333043951098,
+  "timing": -0.5286110468094904,
+  "self_area": -0.9140180875323568,
+  "self_dead": -100.0,
+  "lag_danger": -0.6787964939327888,
+  "kill": 10.408245246631056,
+  "robust": 1.3104095348911295,
+  "approach": -0.09754689449939324,
+  "proximity": 0.2540203221640516
+ },
+ "mix": 0.3,
+ "history": [
+  {
+   "iter": 0,
+   "role": "defense",
+   "base_reward": 0.256,
+   "pop_mean_reward": 0.267,
+   "win_rate": 0.0,
+   "self_kill_rate": 0.0,
+   "mean_D": 1.12,
+   "mean_F": 0.576,
+   "mean_routes_cut": 1.333,
+   "seconds": 52.0
+  },
+  {
+   "iter": 1,
+   "role": "defense",
+   "base_reward": 0.279,
+   "pop_mean_reward": 0.269,
+   "win_rate": 0.0,
+   "self_kill_rate": 0.0,
+   "mean_D": 2.383,
+   "mean_F": 0.384,
+   "mean_routes_cut": 1.592,
+   "seconds": 53.8
+  },
+  {
+   "iter": 0,
+   "role": "offense",
+   "base_reward": 0.219,
+   "pop_mean_reward": 0.27,
+   "win_rate": 0.0,
+   "self_kill_rate": 0.0,
+   "mean_D": 2.811,
+   "mean_F": 0.125,
+   "mean_routes_cut": 1.143,
+   "seconds": 53.5
+  },
+  {
+   "iter": 1,
+   "role": "offense",
+   "base_reward": 0.254,
+   "pop_mean_reward": 0.264,
+   "win_rate": 0.0,
+   "self_kill_rate": 0.0,
+   "mean_D": 2.495,
+   "mean_F": 0.209,
+   "mean_routes_cut": 1.393,
+   "seconds": 43.1
+  }
+ ],
+ "seed": 0,
+ "role_last": "offense"
+}

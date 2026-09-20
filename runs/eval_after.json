@@ -1,0 +1,50 @@
+{
+ "random": {
+  "games": 4,
+  "max_frames": 1800,
+  "win_rate": 1.0,
+  "loss_rate": 0.0,
+  "draw_rate": 0.0,
+  "self_kill_rate": 0.0,
+  "attack_success_rate": 0.0,
+  "kills": 0,
+  "bombs_placed": 1,
+  "mean_frames": 185.5,
+  "mean_routes_cut": 0.6666666666666666,
+  "mean_D": 0.5704019092821397,
+  "mean_F": 0.1684093266018586,
+  "seconds": 1.7
+ },
+ "rule": {
+  "games": 4,
+  "max_frames": 1800,
+  "win_rate": 0.0,
+  "loss_rate": 0.0,
+  "draw_rate": 1.0,
+  "self_kill_rate": 0.0,
+  "attack_success_rate": 0.0,
+  "kills": 0,
+  "bombs_placed": 7,
+  "mean_frames": 1800.0,
+  "mean_routes_cut": 1.2857142857142858,
+  "mean_D": 2.476251912290682,
+  "mean_F": 0.09638332400170745,
+  "seconds": 12.4
+ },
+ "untrained": {
+  "games": 4,
+  "max_frames": 1800,
+  "win_rate": 0.0,
+  "loss_rate": 0.0,
+  "draw_rate": 1.0,
+  "self_kill_rate": 0.0,
+  "attack_success_rate": 0.0,
+  "kills": 0,
+  "bombs_placed": 17,
+  "mean_frames": 1800.0,
+  "mean_routes_cut": 0.8928571428571429,
+  "mean_D": 2.1759825523787173,
+  "mean_F": 0.14417632677201347,
+  "seconds": 22.5
+ }
+}
