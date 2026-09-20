@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bomberman AI | Match Viewer</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,sans-serif;background:#0c1425;color:#e8edf7}
+*{box-sizing:border-box}body{margin:0;padding:24px;max-width:1260px;margin:auto}
+h1{font-size:24px;margin:0 0 4px}.sub{color:#a9b9d1;margin:0 0 20px}
+.layout{display:grid;grid-template-columns:minmax(0,800px) minmax(240px,1fr);gap:20px}
+.panel{background:#17243a;border:1px solid #31445e;border-radius:16px;padding:18px}
+canvas{width:100%;aspect-ratio:13/11;display:block;border-radius:10px;background:#0c1928}
+.controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:14px}
+button,select{background:#263c57;color:#fff;border:1px solid #4d6788;padding:10px 13px;border-radius:8px;cursor:pointer;font:inherit}
+button:hover{background:#34577e}input[type=range]{flex:1;min-width:160px;accent-color:#6ebdfb}
+.time{font-variant-numeric:tabular-nums;min-width:112px;text-align:right}
+.fighter{border-radius:10px;padding:14px;margin:10px 0;background:#243650;border-left:5px solid #53b9ff}
+.fighter.p1{border-left-color:#ff719a}.fighter strong{font-size:18px}
+.detail{font-size:13px;color:#b5c5db;margin-top:6px;overflow-wrap:anywhere}
+.result{font-weight:700;margin:16px 0;min-height:24px}
+.events{font-size:14px;line-height:1.6;color:#d3deeb;max-height:220px;overflow:auto;white-space:pre-line}
+.legend{display:flex;flex-wrap:wrap;gap:14px;color:#adc0d8;font-size:13px;margin:12px 0 0}
+@media(max-width:850px){body{padding:12px}.layout{grid-template-columns:1fr}.panel{padding:12px}}
+</style>
+</head>
+<body>
+<h1>Bomberman AI 対戦ビューア</h1>
+<p class="sub" id="subtitle"></p>
+<div class="layout">
+<div class="panel">
+<canvas id="arena" width="780" height="660" aria-label="対戦盤面"></canvas>
+<div class="legend"><span>🔵 AI 0</span><span>🔴 AI 1</span><span>💣 数字 = 爆発までの秒数</span><span>橙 = 爆炎</span></div>
+<div class="controls">
+<button id="play" aria-label="再生または一時停止">▶ 再生</button>
+<button id="back" aria-label="1コマ戻す">◀ 1コマ</button>
+<button id="next" aria-label="1コマ進める">1コマ ▶</button>
+<select id="speed" aria-label="再生速度"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
+<input id="seek" type="range" min="0" max="0" value="0" aria-label="再生位置">
+<span id="time" class="time"></span>
+</div>
+</div>
+<aside class="panel">
+<div id="fighter0" class="fighter"></div><div id="fighter1" class="fighter p1"></div>
+<div id="result" class="result"></div>
+<h3>このコマのイベント</h3><div id="events" class="events"></div>
+<p class="detail">同じシードと行動列からPythonエンジンで再計算した試合です。キック・パンチ・投げは振りかぶりの後に発動します。</p>
+</aside>
+</div>
+<script id="replay-data" type="application/json">__REPLAY_DATA__</script>
+<script>
+const data=JSON.parse(document.getElementById('replay-data').textContent);
+const frames=data.frames, canvas=document.getElementById('arena'), ctx=canvas.getContext('2d');
+const $=id=>document.getElementById(id), cw=canvas.width/data.cols, ch=canvas.height/data.rows;
+let index=0, playing=false, previous=0, fractional=0;
+const labels={STAY:'待機',U:'上',D:'下',L:'左',R:'右',BOMB:'設置',PUNCH:'パンチ',PICKUP:'拾う',THROW:'投げ'};
+function actionText(value){return value.split('/').map(x=>labels[x]||x).join('＋')}
+function rect(x,y,w,h,color){ctx.fillStyle=color;ctx.fillRect(x,y,w,h)}
+function circle(x,y,r,color){ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fillStyle=color;ctx.fill()}
+function render(){
+ const s=frames[index];ctx.clearRect(0,0,canvas.width,canvas.height);
+ for(let r=0;r<data.rows;r++)for(let c=0;c<data.cols;c++){
+   rect(c*cw,r*ch,cw,ch,(c+r)%2?'#172f41':'#1b3649');
+   ctx.strokeStyle='#345264';ctx.lineWidth=1;ctx.strokeRect(c*cw+.5,r*ch+.5,cw-1,ch-1);
+ }
+ for(const [c,r] of data.pillars){rect(c*cw+3,r*ch+3,cw-6,ch-6,'#728499');rect(c*cw+7,r*ch+7,cw-14,ch-14,'#97aabd')}
+ for(const [c,r] of s.flames){rect(c*cw+3,r*ch+3,cw-6,ch-6,'#fa7b29');circle((c+.5)*cw,(r+.5)*ch,Math.min(cw,ch)*.29,'#ffe083')}
+ for(const b of s.bombs){
+  if(b.held)continue;
+  const pos=b.fly_to?{c:(b.c+b.fly_to[0])/2,r:(b.r+b.fly_to[1])/2}:b;
+  const x=(pos.c+.5)*cw,y=(pos.r+.5)*ch;
+  circle(x,y,Math.min(cw,ch)*.31,b.owner?'#ff719a':'#63bcff');circle(x,y,Math.min(cw,ch)*.24,'#101c30');
+  ctx.fillStyle='#fff';ctx.font='bold 13px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText(b.explode_at<0?'↗':((Math.max(0,b.explode_at-s.t)/data.fps).toFixed(1)),x,y);
+ }
+ s.players.forEach((p,i)=>{
+  const x=(p.c+p.dc*p.prog/data.speed+.5)*cw,y=(p.r+p.dr*p.prog/data.speed+.5)*ch;
+  circle(x,y,Math.min(cw,ch)*.32,i?'#ff719a':'#53b9ff');
+  ctx.fillStyle='#0b1c2c';ctx.textAlign='center';ctx.textBaseline='middle';ctx.font='bold 20px system-ui';ctx.fillText(p.alive?String(i+1):'×',x,y);
+  if(p.queued){ctx.fillStyle='#fff';ctx.font='bold 11px system-ui';ctx.fillText(p.queued.kind,x,y-24)}
+ });
+ $('seek').value=index;$('time').textContent=`${(s.t/data.fps).toFixed(2)}秒 / ${(frames.at(-1).t/data.fps).toFixed(2)}秒`;
+ $('subtitle').textContent=`${data.meta.a||'AI 0'}（青） 対 ${data.meta.b||'AI 1'}（赤）｜シード ${data.meta.seed??'不明'}｜${frames.length-1} コマ`;
+ s.players.forEach((p,i)=>{$('fighter'+i).innerHTML=`<strong>${i?'🔴':'🔵'} ${escapeHtml(i?data.meta.b||'AI 1':data.meta.a||'AI 0')}</strong><div class="detail">${p.alive?'生存':'死亡'}｜位置 (${p.c}, ${p.r})｜向き ${labels[p.face]}<br>行動: ${escapeHtml(actionText(s.actions[i]))}${p.queued?'｜準備中: '+escapeHtml(p.queued.kind):''}${p.holding!==null?'｜爆弾を保持':''}</div>`});
+ $('result').textContent=s.winner===null?`${s.bombs.length} 個の爆弾が盤上にあります`:s.winner===-1?'引き分け':`${s.winner?'赤':'青'}の勝利`;
+ $('events').textContent=s.events.length?s.events.join('\n'):'イベントなし';
+ $('play').textContent=playing?'⏸ 一時停止':'▶ 再生';
+}
+function escapeHtml(v){return String(v).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}
+function jump(n){index=Math.max(0,Math.min(frames.length-1,n));render()}
+function tick(now){if(playing){if(previous){fractional+=(now-previous)*data.fps*Number($('speed').value)/1000;const advance=Math.floor(fractional);if(advance){fractional-=advance;jump(index+advance)}if(index===frames.length-1){playing=false;render()}}previous=now}else previous=0;requestAnimationFrame(tick)}
+$('play').onclick=()=>{if(index===frames.length-1)jump(0);playing=!playing;previous=0;render()};
+$('back').onclick=()=>{playing=false;jump(index-1)};$('next').onclick=()=>{playing=false;jump(index+1)};
+$('seek').max=frames.length-1;$('seek').oninput=e=>{playing=false;jump(Number(e.target.value))};
+window.addEventListener('keydown',e=>{if(['INPUT','SELECT','BUTTON'].includes(document.activeElement.tagName))return;if(e.code==='Space'){e.preventDefault();$('play').click()}else if(e.code==='ArrowRight')$('next').click();else if(e.code==='ArrowLeft')$('back').click()});
+render();requestAnimationFrame(tick);
+</script>
+</body>
+</html>

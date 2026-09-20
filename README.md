@@ -19,6 +19,13 @@ python verify_manual.py                               # 盤面を描きながら
 python -m bomberman_ai.cli match --a rule --b random --games 4 --seed 0 --replay runs/last.json
 python -m bomberman_ai.cli replay --file runs/last.json          # 保存したリプレイを再生（同じ結果になる）
 
+# AI同士の試合をブラウザで見る（生成後に runs/match.html をダブルクリック）
+python -m bomberman_ai.cli view --a combined --b rule --seed 100 --max-frames 600 --out runs/match.html
+# 保存済みの試合も同じビューアで確認できる
+python -m bomberman_ai.cli view --file runs/last.json --out runs/last.html
+# モデルの重みを使う場合
+python -m bomberman_ai.cli view --a combined --b combined --model runs/model.json --max-frames 1800 --out runs/learned.html
+
 # 学習（守備の重みを更新 → 攻撃の重みを更新。1試合は 1800 コマ = 30 秒に短縮すると速い）
 python -m bomberman_ai.cli train --role defense --iters 2 --pop 4 --games 2 --seed 0 --max-frames 1800 --out runs/model.json
 python -m bomberman_ai.cli train --role offense --iters 2 --pop 4 --games 2 --seed 0 --max-frames 1800 --model runs/model.json --out runs/model.json
@@ -40,13 +47,14 @@ python -m bomberman_ai.cli evaluate --games 6 --seed 100 --max-frames 1800 --mod
 | `bomberman_ai/actions.py` | 行動の文字列表現と合法行動 `legal_actions(state, i)` |
 | `bomberman_ai/engine.py` | 1コマ進める `step(state, a0, a1)`。爆発・誘爆・キック・パンチ・投げ（いずれも振りかぶりの硬直あり）・気絶・硬直・死亡・勝敗 |
 | `bomberman_ai/replay.py` | リプレイの保存・再生 |
+| `bomberman_ai/viewer.py` / `viewer.html` | 対戦をブラウザで再生する単一HTMLの生成。Pythonエンジンで全コマを再計算して埋め込む |
 | `bomberman_ai/safety.py` | Safety Solver。燃え始め時刻 L、逃げ込めるマス、逃走路、時間余裕、到達可能マス |
 | `bomberman_ai/defense.py` | 守備評価 D: 特徴量 `defense_features` / 重み `DEFAULT_WEIGHTS` / 選択 `choose_defense`。先読み `lookahead` |
 | `bomberman_ai/offense.py` | 攻撃評価 F: 特徴量 `offense_features` / 重み / 2段階の候補評価 `rank_candidates` / 頑健さ `robustness` |
 | `bomberman_ai/agents.py` | RandomAgent / RuleAgent / DefenseAgent / OffenseAgent / CombinedAgent、`play_game` |
 | `bomberman_ai/evaluate.py` | 対戦評価（勝率・自爆率・攻撃成功率・逃走路の削減量）と学習前後の比較表 |
 | `bomberman_ai/learn.py` | 初期学習処理（進化戦略で D・F の重みを更新、報酬ハックの確認用ログ） |
-| `bomberman_ai/cli.py` | コマンド入口（match / train / evaluate / replay） |
+| `bomberman_ai/cli.py` | コマンド入口（match / train / evaluate / replay / view） |
 | `bridge/from_analysis.py` | 動画解析の replay_data.js の 1 コマを GameState に変換（解析側との接続） |
 | `tests/` | ルール（12）、安全ソルバー（5）、エージェント・学習の煙テスト（5） |
 

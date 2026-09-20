@@ -9,6 +9,7 @@ from .agents import make_agent, play_game
 from .evaluate import match, evaluate_suite, load_model, table
 from . import replay as R
 from .learn import train
+from .viewer import write_html
 
 
 def main(argv=None):
@@ -42,6 +43,14 @@ def main(argv=None):
     e.add_argument("--out", default="")
     r = sub.add_parser("replay")
     r.add_argument("--file", required=True)
+    v = sub.add_parser("view", help="AI対戦か保存済みリプレイを、ブラウザで開けるHTMLにする")
+    v.add_argument("--file", default="", help="既存のリプレイJSON（省略時はAI同士で試合）")
+    v.add_argument("--a", choices=["random", "rule", "defense", "offense", "combined"], default="combined")
+    v.add_argument("--b", choices=["random", "rule", "defense", "offense", "combined"], default="rule")
+    v.add_argument("--model", default="")
+    v.add_argument("--seed", type=int, default=100)
+    v.add_argument("--max-frames", type=int, default=600)
+    v.add_argument("--out", default="runs/match.html")
     for sp in (m, t, e):
         sp.add_argument("--max-frames", type=int, default=7200, help="1試合の最大コマ数（学習を速くするには 1800 など）")
     a = ap.parse_args(argv)
@@ -68,6 +77,19 @@ def main(argv=None):
         s0, acts, meta = R.load(a.file)
         s = R.play(s0, acts)
         print("meta", meta, "winner", s.winner, "frames", s.frame, "key", hash(s.key()))
+    elif a.cmd == "view":
+        if a.file:
+            s0, acts, meta = R.load(a.file)
+        else:
+            if a.max_frames < 1:
+                ap.error("--max-frames must be positive")
+            model = load_model(a.model)
+            s, acts, s0 = play_game(make_agent(a.a, model), make_agent(a.b, model),
+                                    seed=a.seed, max_frames=a.max_frames)
+            meta = {"a": a.a, "b": a.b, "seed": a.seed, "winner": s.winner, "frames": s.frame,
+                    "model": a.model or "default weights"}
+        path = write_html(a.out, s0, acts, meta)
+        print("browser viewer ->", path.resolve(), "frames", len(acts))
 
 
 if __name__ == "__main__":
