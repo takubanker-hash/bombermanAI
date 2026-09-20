@@ -42,6 +42,8 @@
 
 重みの変化（初期値との差）: wD: safe_area -0.92, routes +0.98, slack -0.89, on_line +1.09, mobility +1.58, deadend -1.70, own_danger -0.97, dist_opp -0.18 / wF: area_cut +1.99, routes_cut -0.57, future_cut -0.64, chain -0.33, timing -1.03, self_area -1.71, lag_danger +0.82, kill +0.41, robust +0.31, approach -0.40, proximity -0.05
 
+注意: 母集団 4・各 2 試合・学習率 0.5 なので、この重みの変化はほぼ雑音（報酬差が小さい）。実運用では母集団と試合数を増やし学習率を下げること。
+
 結論: 学習処理は動き、重みは更新される（報酬は形づくり項で差が付く）が、この設定では勝率・攻撃成功率は 0 のまま。
 「評価点（mean_D・mean_routes_cut）は動くのに勝率が動かない」状態で、そのまま学習を続けると評価点稼ぎになり得る。まず下記 1〜2 の改善が必要。
 
